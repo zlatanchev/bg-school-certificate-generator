@@ -21,40 +21,41 @@ from num2words import num2words
 
 def initialize_paths():
     """
-    Sucht nach Standard-Dateinamen im Skriptverzeichnis und füllt die GUI-Pfade vor.
-    Diese Funktion macht das Tool "portable", solange die Dateien beisammen bleiben.
+    Sucht nach Standard-Dateinamen und füllt die GUI-Pfade vor.
+    Diese Logik funktioniert sowohl für das .py-Skript als auch für die .exe-Datei.
     """
     try:
-        # Bestimme das Verzeichnis, in dem das Skript/die EXE-Datei ausgeführt wird
         if getattr(sys, 'frozen', False):
-            # Fall 1: Die Anwendung ist eine "eingefrorene" .exe (z.B. mit PyInstaller erstellt)
-            script_dir = os.path.dirname(sys.executable)
+            # Fall 1: Anwendung läuft als kompilierte .exe (erstellt mit PyInstaller).
+            # PyInstaller speichert gebündelte Dateien in einem temporären Ordner,
+            # dessen Pfad in `sys._MEIPASS` liegt.
+            base_path = os.path.dirname(sys.executable)
         else:
-            # Fall 2: Die Anwendung wird als normales .py Skript ausgeführt
-            script_dir = os.path.dirname(os.path.abspath(__file__))
+            # Fall 2: Anwendung läuft als normales .py-Skript.
+            # Der Basispfad ist das Verzeichnis, in dem das Skript liegt.
+            base_path = os.path.dirname(os.path.abspath(__file__))
 
-        # Definiere die Standard-Dateinamen, nach denen gesucht wird
+        # Definiere die Standard-Dateinamen
         default_files = {
             "schuelerliste": "schuelerliste.xlsx",
             "preise": "preise.xlsx",
             "template": "Quittung-Template.docx"
         }
 
-        # Überprüfe die Existenz jeder Datei und setze den Pfad in der GUI, falls gefunden
-        path_schueler = os.path.join(script_dir, default_files["schuelerliste"])
+        # Baue die vollen Pfade und überprüfe, ob die Dateien existieren
+        path_schueler = os.path.join(base_path, default_files["schuelerliste"])
         if os.path.exists(path_schueler):
             excel_path_var.set(path_schueler)
 
-        path_preise = os.path.join(script_dir, default_files["preise"])
+        path_preise = os.path.join(base_path, default_files["preise"])
         if os.path.exists(path_preise):
             prices_path_var.set(path_preise)
         
-        path_template = os.path.join(script_dir, default_files["template"])
+        path_template = os.path.join(base_path, default_files["template"])
         if os.path.exists(path_template):
             template_path_var.set(path_template)
             
     except Exception as e:
-        # Falls bei der Pfad-Ermittlung etwas schiefgeht, wird einfach nichts vor-ausgefüllt.
         print(f"Fehler bei der Initialisierung der Pfade: {e}")
 
 
