@@ -24,8 +24,8 @@ Ein Desktop-Werkzeug mit grafischer Benutzeroberfläche (GUI) zur automatisierte
 1.  **Klonen Sie das Repository (falls zutreffend):**
 
     ```bash
-    git clone https://github.com/ihr-benutzername/ihr-projekt.git
-    cd ihr-projekt
+    git clone https://github.com/zlatanchev/bg-school-certificate-generator.git
+    cd bg-school-certificate-generator
     ```
 
 2.  **Erstellen Sie eine virtuelle Umgebung (empfohlen):**
@@ -49,7 +49,7 @@ Ein Desktop-Werkzeug mit grafischer Benutzeroberfläche (GUI) zur automatisierte
 
 Damit das Werkzeug funktioniert, müssen die folgenden Dateien vorbereitet und idealerweise im selben Ordner wie das Skript abgelegt werden:
 
-1.  **`quittungsgenerator.py`**
+1.  **`quittungs_generator.py`**
 
       - Die Haupt-Skriptdatei, die das Programm enthält.
 
