@@ -37,7 +37,7 @@ def initialize_paths():
 
         # Definiere die Standard-Dateinamen
         default_files = {
-            "schuelerliste": "mitglieder_mit_zahlungen_und_zeilen.xlsx",
+            "schuelerliste": "schuelerliste.xlsx",
             "preise": "preise.xlsx",
             "template": "Quittung-Template.docx"
         }
