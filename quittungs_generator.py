@@ -62,31 +62,34 @@ def initialize_paths():
         print(f"Fehler bei der Initialisierung der Pfade: {e}")
 
 
-def docx_replace_text(doc, placeholder, replacement):
-    def replace_in_paragraph(paragraph):
-        # Combine all runs' text
-        full_text = ''.join(run.text for run in paragraph.runs)
-        if placeholder not in full_text:
-            return
+def docx_replace_text(doc_obj, old_text, new_text):
+    """
+    Ersetzt rekursiv Text in einem Word-Dokumentobjekt (Absatz oder Zelle)
+    und behält dabei die ursprüngliche Formatierung bei.
 
-        # Replace the placeholder in full text
-        new_text = full_text.replace(placeholder, replacement)
+    Diese Funktion durchläuft die "Runs" (formatierte Textabschnitte) und
+    stellt sicher, dass Stile wie Fettdruck erhalten bleiben.
+    """
+    # Ersetzen in Absätzen
+    for p in doc_obj.paragraphs:
+        if old_text in p.text:
+            inline = p.runs
+            # Ersetze den Text und behalte die Formatierung des ersten Teils bei
+            for i in range(len(inline)):
+                if old_text in inline[i].text:
+                    text = inline[i].text.replace(old_text, new_text)
+                    inline[i].text = text
+                    # Entferne den Platzhalter aus den nachfolgenden Teilen, falls er aufgeteilt war
+                    for j in range(i + 1, len(inline)):
+                        if old_text in inline[j].text:
+                            inline[j].text = inline[j].text.replace(old_text, "")
+                    break # Wichtig, um nicht mehrfach im selben Absatz zu ersetzen
 
-        # Clear all runs
-        for run in paragraph.runs:
-            run.text = ''
-        # Set the first run to the replaced text
-        if paragraph.runs:
-            paragraph.runs[0].text = new_text
-
-    for paragraph in doc.paragraphs:
-        replace_in_paragraph(paragraph)
-
-    for table in doc.tables:
+    # Rekursiver Aufruf für alle Tabellen im Dokumentenobjekt
+    for table in doc_obj.tables:
         for row in table.rows:
             for cell in row.cells:
-                for paragraph in cell.paragraphs:
-                    replace_in_paragraph(paragraph)
+                docx_replace_text(cell, old_text, new_text)
 
 
 
