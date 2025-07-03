@@ -37,7 +37,7 @@ def initialize_paths():
 
         # Definiere die Standard-Dateinamen
         default_files = {
-            "schuelerliste": "schuelerliste.xlsx",
+            "schuelerliste": "mitglieder_mit_zahlungen_und_zeilen.xlsx",
             "preise": "preise.xlsx",
             "template": "Quittung-Template.docx"
         }
@@ -54,28 +54,40 @@ def initialize_paths():
         path_template = os.path.join(base_path, default_files["template"])
         if os.path.exists(path_template):
             template_path_var.set(path_template)
+
+        out_dir = os.path.join(base_path, "out")
+        output_dir_var.set(out_dir)
             
     except Exception as e:
         print(f"Fehler bei der Initialisierung der Pfade: {e}")
 
 
-def docx_replace_text(doc_obj, old_text, new_text):
-    """Ersetzt rekursiv Text in einem Word-Dokumentobjekt und behält die Formatierung bei."""
-    for p in doc_obj.paragraphs:
-        if old_text in p.text:
-            inline = p.runs
-            for i in range(len(inline)):
-                if old_text in inline[i].text:
-                    text = inline[i].text.replace(old_text, new_text)
-                    inline[i].text = text
-                    for j in range(i + 1, len(inline)):
-                        if old_text in inline[j].text:
-                            inline[j].text = inline[j].text.replace(old_text, "")
-                    break
-    for table in doc_obj.tables:
+def docx_replace_text(doc, placeholder, replacement):
+    def replace_in_paragraph(paragraph):
+        # Combine all runs' text
+        full_text = ''.join(run.text for run in paragraph.runs)
+        if placeholder not in full_text:
+            return
+
+        # Replace the placeholder in full text
+        new_text = full_text.replace(placeholder, replacement)
+
+        # Clear all runs
+        for run in paragraph.runs:
+            run.text = ''
+        # Set the first run to the replaced text
+        if paragraph.runs:
+            paragraph.runs[0].text = new_text
+
+    for paragraph in doc.paragraphs:
+        replace_in_paragraph(paragraph)
+
+    for table in doc.tables:
         for row in table.rows:
             for cell in row.cells:
-                docx_replace_text(cell, old_text, new_text)
+                for paragraph in cell.paragraphs:
+                    replace_in_paragraph(paragraph)
+
 
 
 def load_prices(filepath):
@@ -102,7 +114,11 @@ def load_prices(filepath):
 
 
 def generate_receipts():
-    """Die Hauptfunktion, die den gesamten Generierungsprozess steuert."""
+    """
+    Die Hauptfunktion, die den gesamten Generierungsprozess steuert.
+    **Neue Logik:** Bricht bei Datenfehlern nicht ab, sondern sammelt
+    Fehlermeldungen und überspringt die fehlerhaften Einträge.
+    """
     excel_path = excel_path_var.get()
     template_path = template_path_var.get()
     prices_path = prices_path_var.get()
@@ -112,52 +128,110 @@ def generate_receipts():
         messagebox.showerror("Fehler", "Bitte alle Pfade auswählen!")
         return
 
+    # Liste zum Sammeln von Fehlermeldungen
+    errors_found = []
+    quittungs_nr = 1
+    
     try:
-        # Lade jetzt drei Werte, inklusive des Schuljahres
         child_fees, membership_fee, school_year = load_prices(prices_path)
         
         df = pd.read_excel(excel_path)
-        grouped = df.groupby(['Familienname', 'Vorname_Elternteil'])
         
-        quittungs_nr = 1
+        df.dropna(subset=['Mitglied', 'Kind'], inplace=True)
+        df['Mitglied'] = df['Mitglied'].astype(str).str.strip()
+        
+        grouped = df.groupby('Mitglied')
 
-        for (family_name, parent_first_name), group in grouped:
-            doc = Document(template_path)
-            num_children = len(group)
-            children_names = " und ".join(group['Vorname_Kind'])
-            parent_full_name = f"{parent_first_name} {family_name}"
-            
-            total_school_fee = sum(child_fees.get(i, 0) for i in range(1, num_children + 1))
-            total_amount = total_school_fee + membership_fee
+        for parent_full_name, group in grouped:
+            try:
+                # --- Validierung für diesen spezifischen Eintrag ---
+                is_group_valid = True
+                # 1. Daten-Typ-Prüfung
+                for index, row in group.iterrows():
+                    kind_value = row['Kind']
+                    if not isinstance(kind_value, str):
+                        excel_row_number = index + 2
+                        error_message = (
+                            f"Mitglied: '{parent_full_name}'\n"
+                            f"Grund: Ungültiger Datentyp in Spalte 'Kind' (Excel-Zeile {excel_row_number}).\n"
+                            f"Gefunden: '{kind_value}' (Typ: {type(kind_value).__name__})"
+                        )
+                        errors_found.append(error_message)
+                        is_group_valid = False
+                        break # Nächste Prüfung für diese Gruppe nicht nötig
+                
+                if not is_group_valid:
+                    continue # Überspringe diesen Eintrag und gehe zum nächsten in der Schleife
 
-            gebuehr_wort = num2words(int(total_school_fee), lang='de')
-            mitglied_wort = num2words(int(membership_fee), lang='de')
-            gesamt_wort = num2words(int(total_amount), lang='de')
+                # 2. Status-Prüfung
+                if group['Klasse'].isin(['Abgemeldet', 'Warteliste']).any():
+                    continue
 
-            replacements = {
-                "{{ELTERN_NAME}}": parent_full_name,
-                "{{KINDER_NAMEN}}": children_names,
-                "{{NR}}": f"{quittungs_nr:03d}",
-                "{{DATUM}}": datetime.now().strftime("%d.%m.%Y"),
-                "{{SCHULJAHR}}": school_year, # Nutzt die Variable aus der Excel-Datei
-                "{{BETRAG_GEBUEHR}}": f"{total_school_fee:,.2f} EUR".replace(",", "X").replace(".", ",").replace("X", "."),
-                "{{GESAMTBETRAG}}": f"{total_amount:,.2f} EUR".replace(",", "X").replace(".", ",").replace("X", "."),
-                "{{BETRAG_GEBUEHR_WORT}}": f"{gebuehr_wort} Euro",
-                "{{GESAMTBETRAG_WORT}}": f"{gesamt_wort} Euro",
-                "{{BETRAG_MITGLIED}}": f"{membership_fee:,.2f} EUR".replace(",", "X").replace(".", ",").replace("X", "."),
-                "{{BETRAG_MITGLIED_WORT}}": f"{mitglied_wort} Euro",
-            }
+                # --- Generierung (nur für valide Einträge) ---
+                doc = Document(template_path)
+                num_children = len(group)
+                children_names = " und ".join([str(name) for name in group['Kind']])
 
-            for old, new in replacements.items():
-                docx_replace_text(doc, old, str(new))
+                total_school_fee = sum(child_fees.get(i, 0) for i in range(1, num_children + 1))
+                total_amount = total_school_fee + membership_fee
+                
+                gebuehr_wort = num2words(int(total_school_fee), lang='de')
+                mitglied_wort = num2words(int(membership_fee), lang='de')
+                gesamt_wort = num2words(int(total_amount), lang='de')
 
-            output_filename = os.path.join(output_dir, f"Quittung_{family_name}_{quittungs_nr:03d}.docx")
-            doc.save(output_filename)
-            quittungs_nr += 1
+                replacements = {
+                    "{{ELTERN_NAME}}": parent_full_name,
+                    "{{KINDER_NAMEN}}": children_names, "{{NR}}": f"{quittungs_nr:03d}",
+                    "{{DATUM}}": datetime.now().strftime("%d.%m.%Y"), "{{SCHULJAHR}}": school_year,
+                    "{{BETRAG_GEBUEHR}}": f"{total_school_fee:,.2f} EUR".replace(",", "X").replace(".", ",").replace("X", "."),
+                    "{{GESAMTBETRAG}}": f"{total_amount:,.2f} EUR".replace(",", "X").replace(".", ",").replace("X", "."),
+                    "{{BETRAG_GEBUEHR_WORT}}": f"{gebuehr_wort} Euro", "{{GESAMTBETRAG_WORT}}": f"{gesamt_wort} Euro",
+                    "{{BETRAG_MITGLIED}}": f"{membership_fee:,.2f} EUR".replace(",", "X").replace(".", ",").replace("X", "."),
+                    "{{BETRAG_MITGLIED_WORT}}": f"{mitglied_wort} Euro",
+                }
 
-        messagebox.showinfo("Erfolg", f"{quittungs_nr - 1} Quittung(en) erfolgreich erstellt!")
+                for old, new in replacements.items():
+                    docx_replace_text(doc, old, str(new))
+
+                parent_name = parent_full_name.replace(" ", "_")
+                # Nehmen Sie die erste Klasse aus der Gruppe für den Ordnernamen
+                klasse = str(group['Klasse'].iloc[0])
+                outdir_class = os.path.join(output_dir, klasse)
+                if not os.path.exists(outdir_class):
+                    os.makedirs(outdir_class)
+
+                output_filename = os.path.join(outdir_class, f"Quittung_{parent_name}_{quittungs_nr:03d}.docx")
+                if os.path.exists(output_filename):
+                    os.remove(output_filename)
+                doc.save(output_filename)
+
+                quittungs_nr += 1
+
+            except Exception as e:
+                # Fängt unerwartete Fehler für eine einzelne Gruppe ab
+                error_message = f"Mitglied: '{parent_full_name}'\nGrund: Unerwarteter Fehler -> {e}"
+                errors_found.append(error_message)
+                continue # Überspringe diesen Eintrag
+
     except Exception as e:
-        messagebox.showerror("Fehler", f"Ein Fehler ist aufgetreten:\n{e}")
+        # Fängt kritische Fehler ab (z.B. Datei kann nicht gelesen werden)
+        messagebox.showerror("Kritischer Fehler", f"Ein grundlegender Fehler hat die Verarbeitung gestoppt:\n{e}")
+        return
+
+    # --- Finale Auswertung und Meldung an den Benutzer ---
+    successful_count = quittungs_nr - 1
+    if not errors_found:
+        messagebox.showinfo("Erfolg", f"{successful_count} Quittung(en) erfolgreich erstellt!")
+    else:
+        # Erstelle eine zusammenfassende Nachricht mit allen gefundenen Fehlern
+        error_summary = "\n\n------------------------------------\n\n".join(errors_found)
+        final_message = (
+            f"{successful_count} Quittung(en) wurden erstellt.\n\n"
+            f"Es gab {len(errors_found)} Fehler in der Excel-Datei. Die folgenden Einträge wurden übersprungen:\n\n"
+            f"{error_summary}"
+        )
+        # Zeige eine Warnung statt eines Fehlers, da der Prozess teilweise erfolgreich war
+        messagebox.showwarning("Vorgang abgeschlossen (mit Fehlern)", final_message)
 
 # --- GUI Code ---
 def select_excel_file():
