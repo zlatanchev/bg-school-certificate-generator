@@ -1,13 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Quittungs-Generator für Schulgebühren - Finale, automatisierte Version
-
-**Neue Features:**
-- **Automatisches Finden von Input-Dateien:** Das Skript sucht beim Start im
-  eigenen Verzeichnis nach `schuelerliste.xlsx`, `preise.xlsx` und
-  `Quittung-Template.docx` und füllt die Pfade automatisch aus.
-- **Konfigurierbares Schuljahr:** Das Schuljahr wird nicht mehr im Code,
-  sondern in der `preise.xlsx` im Tabellenblatt 'Konfiguration' festgelegt.
+Quittungs-Generator für Schulgebühren - Finale, automatisierte Version mit skalierendem Logo
 """
 
 import tkinter as tk
@@ -15,34 +8,31 @@ from tkinter import filedialog, messagebox
 import pandas as pd
 from docx import Document
 import os
-import sys # Wird für die Pfad-Ermittlung benötigt
+import sys
 from datetime import datetime
 from num2words import num2words
 
+# Versuche Pillow zu importieren (für die Bildskalierung)
+try:
+    from PIL import Image, ImageTk
+    HAS_PILLOW = True
+except ImportError:
+    HAS_PILLOW = False
+
 def initialize_paths():
-    """
-    Sucht nach Standard-Dateinamen und füllt die GUI-Pfade vor.
-    Diese Logik funktioniert sowohl für das .py-Skript als auch für die .exe-Datei.
-    """
     try:
         if getattr(sys, 'frozen', False):
-            # Fall 1: Anwendung läuft als kompilierte .exe (erstellt mit PyInstaller).
-            # PyInstaller speichert gebündelte Dateien in einem temporären Ordner,
-            # dessen Pfad in `sys._MEIPASS` liegt.
             base_path = os.path.dirname(sys.executable)
         else:
-            # Fall 2: Anwendung läuft als normales .py-Skript.
-            # Der Basispfad ist das Verzeichnis, in dem das Skript liegt.
             base_path = os.path.dirname(os.path.abspath(__file__))
 
-        # Definiere die Standard-Dateinamen
         default_files = {
             "schuelerliste": "schuelerliste.xlsx",
             "preise": "preise.xlsx",
-            "template": "Quittung-Template.docx"
+            "template": "Quittung-Template.docx",
+            "logo": "logo.png"
         }
 
-        # Baue die vollen Pfade und überprüfe, ob die Dateien existieren
         path_schueler = os.path.join(base_path, default_files["schuelerliste"])
         if os.path.exists(path_schueler):
             excel_path_var.set(path_schueler)
@@ -54,6 +44,10 @@ def initialize_paths():
         path_template = os.path.join(base_path, default_files["template"])
         if os.path.exists(path_template):
             template_path_var.set(path_template)
+            
+        path_logo = os.path.join(base_path, default_files["logo"])
+        if os.path.exists(path_logo):
+            logo_path_var.set(path_logo)
 
         out_dir = os.path.join(base_path, "out")
         output_dir_var.set(out_dir)
@@ -61,43 +55,25 @@ def initialize_paths():
     except Exception as e:
         print(f"Fehler bei der Initialisierung der Pfade: {e}")
 
-
 def docx_replace_text(doc_obj, old_text, new_text):
-    """
-    Ersetzt rekursiv Text in einem Word-Dokumentobjekt (Absatz oder Zelle)
-    und behält dabei die ursprüngliche Formatierung bei.
-
-    Diese Funktion durchläuft die "Runs" (formatierte Textabschnitte) und
-    stellt sicher, dass Stile wie Fettdruck erhalten bleiben.
-    """
-    # Ersetzen in Absätzen
     for p in doc_obj.paragraphs:
         if old_text in p.text:
             inline = p.runs
-            # Ersetze den Text und behalte die Formatierung des ersten Teils bei
             for i in range(len(inline)):
                 if old_text in inline[i].text:
                     text = inline[i].text.replace(old_text, new_text)
                     inline[i].text = text
-                    # Entferne den Platzhalter aus den nachfolgenden Teilen, falls er aufgeteilt war
                     for j in range(i + 1, len(inline)):
                         if old_text in inline[j].text:
                             inline[j].text = inline[j].text.replace(old_text, "")
-                    break # Wichtig, um nicht mehrfach im selben Absatz zu ersetzen
+                    break 
 
-    # Rekursiver Aufruf für alle Tabellen im Dokumentenobjekt
     for table in doc_obj.tables:
         for row in table.rows:
             for cell in row.cells:
                 docx_replace_text(cell, old_text, new_text)
 
-
-
 def load_prices(filepath):
-    """
-    Lädt die Preisinformationen UND das Schuljahr aus der Excel-Datei.
-    :return: Ein Tupel (Dictionary Kindergebühren, Float Mitgliedsbeitrag, String Schuljahr).
-    """
     price_sheets = pd.read_excel(filepath, sheet_name=None)
     
     fee_df = price_sheets['Gebuehren']
@@ -108,20 +84,13 @@ def load_prices(filepath):
     contribution_df.columns = contribution_df.columns.str.strip()
     membership_fee = contribution_df[contribution_df.Posten == 'Mitgliedsbeitrag']['Betrag'].iloc[0]
     
-    # Neu: Lese das Konfigurationsblatt für das Schuljahr
     config_df = price_sheets['Konfiguration']
     config_df.columns = config_df.columns.str.strip()
     school_year = config_df[config_df.Eigenschaft == 'Schuljahr']['Wert'].iloc[0]
     
     return child_fees, float(membership_fee), str(school_year)
 
-
 def generate_receipts():
-    """
-    Die Hauptfunktion, die den gesamten Generierungsprozess steuert.
-    **Neue Logik:** Bricht bei Datenfehlern nicht ab, sondern sammelt
-    Fehlermeldungen und überspringt die fehlerhaften Einträge.
-    """
     excel_path = excel_path_var.get()
     template_path = template_path_var.get()
     prices_path = prices_path_var.get()
@@ -131,25 +100,19 @@ def generate_receipts():
         messagebox.showerror("Fehler", "Bitte alle Pfade auswählen!")
         return
 
-    # Liste zum Sammeln von Fehlermeldungen
     errors_found = []
     quittungs_nr = 1
     
     try:
         child_fees, membership_fee, school_year = load_prices(prices_path)
-        
         df = pd.read_excel(excel_path)
-        
         df.dropna(subset=['Eltern 1 - Emailadresse', 'Name Kind'], inplace=True)
         df['Eltern 1 - Emailadresse'] = df['Eltern 1 - Emailadresse'].astype(str).str.strip()
-        
         grouped = df.groupby('Eltern 1 - Emailadresse')
 
         for parent_full_name, group in grouped:
             try:
-                # --- Validierung für diesen spezifischen Eintrag ---
                 is_group_valid = True
-                # 1. Daten-Typ-Prüfung
                 for index, row in group.iterrows():
                     kind_value = row['Name Kind']
                     parent_full_name = row['Eltern 1 - Name']
@@ -162,16 +125,14 @@ def generate_receipts():
                         )
                         errors_found.append(error_message)
                         is_group_valid = False
-                        break # Nächste Prüfung für diese Gruppe nicht nötig
+                        break 
                 
                 if not is_group_valid:
-                    continue # Überspringe diesen Eintrag und gehe zum nächsten in der Schleife
+                    continue 
 
-                # 2. Status-Prüfung
                 if group['In Klasse'].isin(['Warteliste','', ' ']).any():
                     continue
 
-                # --- Generierung (nur für valide Einträge) ---
                 doc = Document(template_path)
                 num_children = len(group)
                 children_names = " und ".join([str(name) for name in group['Name Kind']])
@@ -198,7 +159,6 @@ def generate_receipts():
                     docx_replace_text(doc, old, str(new))
 
                 parent_name = parent_full_name.replace(" ", "_")
-                # Nehmen Sie die erste Klasse aus der Gruppe für den Ordnernamen
                 klasse = str(group['In Klasse'].iloc[0])
                 outdir_class = os.path.join(output_dir, klasse)
                 if not os.path.exists(outdir_class):
@@ -212,29 +172,24 @@ def generate_receipts():
                 quittungs_nr += 1
 
             except Exception as e:
-                # Fängt unerwartete Fehler für eine einzelne Gruppe ab
                 error_message = f"Mitglied: '{parent_full_name}'\nGrund: Unerwarteter Fehler -> {e}"
                 errors_found.append(error_message)
-                continue # Überspringe diesen Eintrag
+                continue 
 
     except Exception as e:
-        # Fängt kritische Fehler ab (z.B. Datei kann nicht gelesen werden)
         messagebox.showerror("Kritischer Fehler", f"Ein grundlegender Fehler hat die Verarbeitung gestoppt:\n{e}")
         return
 
-    # --- Finale Auswertung und Meldung an den Benutzer ---
     successful_count = quittungs_nr - 1
     if not errors_found:
         messagebox.showinfo("Erfolg", f"{successful_count} Quittung(en) erfolgreich erstellt!")
     else:
-        # Erstelle eine zusammenfassende Nachricht mit allen gefundenen Fehlern
         error_summary = "\n\n------------------------------------\n\n".join(errors_found)
         final_message = (
             f"{successful_count} Quittung(en) wurden erstellt.\n\n"
             f"Es gab {len(errors_found)} Fehler in der Excel-Datei. Die folgenden Einträge wurden übersprungen:\n\n"
             f"{error_summary}"
         )
-        # Zeige eine Warnung statt eines Fehlers, da der Prozess teilweise erfolgreich war
         messagebox.showwarning("Vorgang abgeschlossen (mit Fehlern)", final_message)
 
 # --- GUI Code ---
@@ -254,35 +209,71 @@ def select_output_dir():
     dirpath = filedialog.askdirectory()
     if dirpath: output_dir_var.set(dirpath)
 
-# Erstelle das Hauptfenster
 root = tk.Tk()
 root.title("Quittungs-Generator (Auto-Detect Version)")
-root.geometry("600x320")
+root.geometry("600x480") 
 
-# Erstelle die String-Variablen für die Pfade
-excel_path_var, template_path_var, prices_path_var, output_dir_var = tk.StringVar(), tk.StringVar(), tk.StringVar(), tk.StringVar()
+excel_path_var = tk.StringVar()
+template_path_var = tk.StringVar()
+prices_path_var = tk.StringVar()
+output_dir_var = tk.StringVar()
+logo_path_var = tk.StringVar()
 
-# Erstelle den Haupt-Frame
 frame = tk.Frame(root, padx=10, pady=10)
 frame.pack(expand=True, fill=tk.BOTH)
 
-# Erstelle die GUI-Elemente (Widgets)
-tk.Label(frame, text="1. Excel-Datei (Schülerliste) auswählen:").grid(row=0, column=0, sticky="w", pady=2)
-tk.Entry(frame, textvariable=excel_path_var, width=60).grid(row=1, column=0, padx=(0, 5))
-tk.Button(frame, text="Durchsuchen...", command=select_excel_file).grid(row=1, column=1)
-tk.Label(frame, text="2. Excel-Datei (Preise) auswählen:").grid(row=2, column=0, sticky="w", pady=(10, 2))
-tk.Entry(frame, textvariable=prices_path_var, width=60).grid(row=3, column=0, padx=(0, 5))
-tk.Button(frame, text="Durchsuchen...", command=select_prices_file).grid(row=3, column=1)
-tk.Label(frame, text="3. Word-Vorlagendatei auswählen:").grid(row=4, column=0, sticky="w", pady=(10, 2))
-tk.Entry(frame, textvariable=template_path_var, width=60).grid(row=5, column=0, padx=(0, 5))
-tk.Button(frame, text="Durchsuchen...", command=select_template_file).grid(row=5, column=1)
-tk.Label(frame, text="4. Ausgabeordner auswählen:").grid(row=6, column=0, sticky="w", pady=(10, 2))
-tk.Entry(frame, textvariable=output_dir_var, width=60).grid(row=7, column=0, padx=(0, 5))
-tk.Button(frame, text="Durchsuchen...", command=select_output_dir).grid(row=7, column=1)
-tk.Button(frame, text="🚀 Quittungen generieren", font=("Helvetica", 12, "bold"), command=generate_receipts, bg="#4CAF50", fg="white").grid(row=8, column=0, columnspan=2, pady=20, ipadx=10, ipady=5)
-
-# **NEU**: Rufe die Initialisierungsfunktion nach dem Erstellen der GUI auf
 initialize_paths()
 
-# Starte die Anwendung
+# --- Logo laden, skalieren und einbinden ---
+logo_path = logo_path_var.get()
+if os.path.exists(logo_path):
+    if HAS_PILLOW:
+        try:
+            # Bild öffnen
+            img = Image.open(logo_path)
+            
+            # Definiere den maximalen Platz, den das Logo einnehmen darf
+            max_width = 500
+            max_height = 120
+            
+            # thumbnail behält die Proportionen bei und skaliert es so, 
+            # dass es in die maximalen Abmessungen passt
+            # Verwende LANCZOS für hohe Qualität beim Verkleinern
+            try:
+                resample_filter = Image.Resampling.LANCZOS # Neuere Pillow Versionen
+            except AttributeError:
+                resample_filter = Image.ANTIALIAS # Ältere Pillow Versionen
+
+            img.thumbnail((max_width, max_height), resample_filter)
+            
+            # Konvertiere das Pillow-Bild in ein Tkinter-kompatibles Format
+            logo_img = ImageTk.PhotoImage(img)
+            root.logo_img = logo_img # Referenz halten!
+            
+            tk.Label(frame, image=logo_img).grid(row=0, column=0, columnspan=2, pady=(0, 15))
+        except Exception as e:
+            print(f"Konnte Logo nicht verarbeiten: {e}")
+            tk.Label(frame, text="[Fehler bei der Logo-Verarbeitung]").grid(row=0, column=0, columnspan=2, pady=(0, 15))
+    else:
+        tk.Label(frame, text="[Bitte 'Pillow' installieren (pip install Pillow) für Logo-Skalierung]", fg="red").grid(row=0, column=0, columnspan=2, pady=(0, 15))
+
+# GUI Elemente
+tk.Label(frame, text="1. Excel-Datei (Schülerliste) auswählen:").grid(row=1, column=0, sticky="w", pady=2)
+tk.Entry(frame, textvariable=excel_path_var, width=60).grid(row=2, column=0, padx=(0, 5))
+tk.Button(frame, text="Durchsuchen...", command=select_excel_file).grid(row=2, column=1)
+
+tk.Label(frame, text="2. Excel-Datei (Preise) auswählen:").grid(row=3, column=0, sticky="w", pady=(10, 2))
+tk.Entry(frame, textvariable=prices_path_var, width=60).grid(row=4, column=0, padx=(0, 5))
+tk.Button(frame, text="Durchsuchen...", command=select_prices_file).grid(row=4, column=1)
+
+tk.Label(frame, text="3. Word-Vorlagendatei auswählen:").grid(row=5, column=0, sticky="w", pady=(10, 2))
+tk.Entry(frame, textvariable=template_path_var, width=60).grid(row=6, column=0, padx=(0, 5))
+tk.Button(frame, text="Durchsuchen...", command=select_template_file).grid(row=6, column=1)
+
+tk.Label(frame, text="4. Ausgabeordner auswählen:").grid(row=7, column=0, sticky="w", pady=(10, 2))
+tk.Entry(frame, textvariable=output_dir_var, width=60).grid(row=8, column=0, padx=(0, 5))
+tk.Button(frame, text="Durchsuchen...", command=select_output_dir).grid(row=8, column=1)
+
+tk.Button(frame, text="🚀 Quittungen generieren", font=("Helvetica", 12, "bold"), command=generate_receipts, bg="#4CAF50", fg="white").grid(row=9, column=0, columnspan=2, pady=20, ipadx=10, ipady=5)
+
 root.mainloop()
