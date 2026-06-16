@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Quittungs-Generator für Schulgebühren - Finale, automatisierte Version mit skalierendem Logo
+Quittungs-Generator für Schulgebühren - Finale Version mit zentrierter GUI und intelligenter Namenstrennung
 """
 
 import tkinter as tk
@@ -135,7 +135,13 @@ def generate_receipts():
 
                 doc = Document(template_path)
                 num_children = len(group)
-                children_names = " und ".join([str(name) for name in group['Name Kind']])
+                
+                # --- NEU: Dynamische Namenstrennung (Komma & "und") ---
+                kinder_liste = [str(name) for name in group['Name Kind']]
+                if len(kinder_liste) > 2:
+                    children_names = ", ".join(kinder_liste[:-1]) + " und " + kinder_liste[-1]
+                else:
+                    children_names = " und ".join(kinder_liste)
 
                 total_school_fee = sum(child_fees.get(i, 0) for i in range(1, num_children + 1))
                 total_amount = total_school_fee + membership_fee
@@ -219,8 +225,9 @@ prices_path_var = tk.StringVar()
 output_dir_var = tk.StringVar()
 logo_path_var = tk.StringVar()
 
+# GEÄNDERT: fill=tk.BOTH entfernt. Das Frame packt sich jetzt kompakt und bleibt permanent zentriert.
 frame = tk.Frame(root, padx=10, pady=10)
-frame.pack(expand=True, fill=tk.BOTH)
+frame.pack(expand=True) 
 
 initialize_paths()
 
@@ -229,26 +236,17 @@ logo_path = logo_path_var.get()
 if os.path.exists(logo_path):
     if HAS_PILLOW:
         try:
-            # Bild öffnen
             img = Image.open(logo_path)
-            
-            # Definiere den maximalen Platz, den das Logo einnehmen darf
             max_width = 500
             max_height = 120
-            
-            # thumbnail behält die Proportionen bei und skaliert es so, 
-            # dass es in die maximalen Abmessungen passt
-            # Verwende LANCZOS für hohe Qualität beim Verkleinern
             try:
-                resample_filter = Image.Resampling.LANCZOS # Neuere Pillow Versionen
+                resample_filter = Image.Resampling.LANCZOS 
             except AttributeError:
-                resample_filter = Image.ANTIALIAS # Ältere Pillow Versionen
+                resample_filter = Image.ANTIALIAS 
 
             img.thumbnail((max_width, max_height), resample_filter)
-            
-            # Konvertiere das Pillow-Bild in ein Tkinter-kompatibles Format
             logo_img = ImageTk.PhotoImage(img)
-            root.logo_img = logo_img # Referenz halten!
+            root.logo_img = logo_img 
             
             tk.Label(frame, image=logo_img).grid(row=0, column=0, columnspan=2, pady=(0, 15))
         except Exception as e:
@@ -257,20 +255,20 @@ if os.path.exists(logo_path):
     else:
         tk.Label(frame, text="[Bitte 'Pillow' installieren (pip install Pillow) für Logo-Skalierung]", fg="red").grid(row=0, column=0, columnspan=2, pady=(0, 15))
 
-# GUI Elemente
-tk.Label(frame, text="1. Excel-Datei (Schülerliste) auswählen:").grid(row=1, column=0, sticky="w", pady=2)
+# GEÄNDERT: Alle Labels nutzen nun 'columnspan=2' ohne händisches 'sticky="w"', um sauber zentriert über den Zeilen zu stehen.
+tk.Label(frame, text="1. Excel-Datei (Schülerliste) auswählen:").grid(row=1, column=0, columnspan=2, pady=2)
 tk.Entry(frame, textvariable=excel_path_var, width=60).grid(row=2, column=0, padx=(0, 5))
 tk.Button(frame, text="Durchsuchen...", command=select_excel_file).grid(row=2, column=1)
 
-tk.Label(frame, text="2. Excel-Datei (Preise) auswählen:").grid(row=3, column=0, sticky="w", pady=(10, 2))
+tk.Label(frame, text="2. Excel-Datei (Preise) auswählen:").grid(row=3, column=0, columnspan=2, pady=(10, 2))
 tk.Entry(frame, textvariable=prices_path_var, width=60).grid(row=4, column=0, padx=(0, 5))
 tk.Button(frame, text="Durchsuchen...", command=select_prices_file).grid(row=4, column=1)
 
-tk.Label(frame, text="3. Word-Vorlagendatei auswählen:").grid(row=5, column=0, sticky="w", pady=(10, 2))
+tk.Label(frame, text="3. Word-Vorlagendatei auswählen:").grid(row=5, column=0, columnspan=2, pady=(10, 2))
 tk.Entry(frame, textvariable=template_path_var, width=60).grid(row=6, column=0, padx=(0, 5))
 tk.Button(frame, text="Durchsuchen...", command=select_template_file).grid(row=6, column=1)
 
-tk.Label(frame, text="4. Ausgabeordner auswählen:").grid(row=7, column=0, sticky="w", pady=(10, 2))
+tk.Label(frame, text="4. Ausgabeordner auswählen:").grid(row=7, column=0, columnspan=2, pady=(10, 2))
 tk.Entry(frame, textvariable=output_dir_var, width=60).grid(row=8, column=0, padx=(0, 5))
 tk.Button(frame, text="Durchsuchen...", command=select_output_dir).grid(row=8, column=1)
 
