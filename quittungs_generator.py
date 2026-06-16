@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Quittungs-Generator für Schulgebühren - Finale Version mit flexibler, linksbündiger GUI
+Quittungs-Generator für Schulgebühren - Finale Version mit flexibler, linksbündiger GUI und Info-Feld
 """
 
 import tkinter as tk
@@ -216,7 +216,8 @@ def select_output_dir():
 
 root = tk.Tk()
 root.title("Quittungs-Generator (Auto-Detect Version)")
-root.geometry("600x480") 
+# Höhe leicht erhöht, um Platz für das Info-Feld zu schaffen
+root.geometry("600x500") 
 
 excel_path_var = tk.StringVar()
 template_path_var = tk.StringVar()
@@ -224,11 +225,9 @@ prices_path_var = tk.StringVar()
 output_dir_var = tk.StringVar()
 logo_path_var = tk.StringVar()
 
-# Dehnt sich bei Fensteränderung horizontal aus (fill=tk.X), bleibt aber vertikal zentriert
 frame = tk.Frame(root, padx=10, pady=10)
 frame.pack(expand=True, fill=tk.X) 
 
-# Gibt Spalte 0 das Gewicht, sich bei Skalierung auszudehnen
 frame.grid_columnconfigure(0, weight=1)
 frame.grid_columnconfigure(1, weight=0)
 
@@ -251,7 +250,6 @@ if os.path.exists(logo_path):
             logo_img = ImageTk.PhotoImage(img)
             root.logo_img = logo_img 
             
-            # Ohne sticky bleibt das Logo zentriert im Gesamtlayout
             tk.Label(frame, image=logo_img).grid(row=0, column=0, columnspan=2, pady=(0, 15))
         except Exception as e:
             print(f"Konnte Logo nicht verarbeiten: {e}")
@@ -259,8 +257,7 @@ if os.path.exists(logo_path):
     else:
         tk.Label(frame, text="[Bitte 'Pillow' installieren (pip install Pillow) für Logo-Skalierung]", fg="red").grid(row=0, column=0, columnspan=2, pady=(0, 15))
 
-# Überschriften sind mit sticky="w" linksbündig zu den Eingabefeldern in Spalte 0 ausgerichtet
-# Eingabefelder füllen mit sticky="ew" elastisch den horizontalen Raum aus
+# Eingabefelder und Buttons
 tk.Label(frame, text="1. Excel-Datei (Schülerliste) auswählen:").grid(row=1, column=0, sticky="w", pady=2)
 tk.Entry(frame, textvariable=excel_path_var, width=60).grid(row=2, column=0, padx=(0, 5), sticky="ew")
 tk.Button(frame, text="Durchsuchen...", command=select_excel_file).grid(row=2, column=1)
@@ -277,7 +274,10 @@ tk.Label(frame, text="4. Ausgabeordner auswählen:").grid(row=7, column=0, stick
 tk.Entry(frame, textvariable=output_dir_var, width=60).grid(row=8, column=0, padx=(0, 5), sticky="ew")
 tk.Button(frame, text="Durchsuchen...", command=select_output_dir).grid(row=8, column=1)
 
-# Ohne sticky bleibt der Button exakt zentriert
-tk.Button(frame, text="🚀 Quittungen generieren", font=("Helvetica", 12, "bold"), command=generate_receipts, bg="#4CAF50", fg="white").grid(row=9, column=0, columnspan=2, pady=20, ipadx=10, ipady=5)
+# Haupt-Button
+tk.Button(frame, text="🚀 Quittungen generieren", font=("Helvetica", 12, "bold"), command=generate_receipts, bg="#4CAF50", fg="white").grid(row=9, column=0, columnspan=2, pady=(20, 10), ipadx=10, ipady=5)
+
+# --- NEU: Info-Feld mit Versionshinweis und Autor ---
+tk.Label(frame, text="Version 17.06.2026; I. Zlat.", font=("Helvetica", 8), fg="gray").grid(row=10, column=0, columnspan=2, pady=(0, 5))
 
 root.mainloop()
