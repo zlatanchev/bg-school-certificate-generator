@@ -49,4 +49,7 @@ Damit das Werkzeug funktioniert, müssen die folgenden Dateien vorbereitet und i
 2.  **`schuelerliste.xlsx`**
     - Die Liste aller Schüler und ihrer zugehörigen Mitglieder.
     - **Benötigte Spalten:**
-        - `Mitglied`: Der vollständige Name des zahlenden Mitglieds/Elternteils. **Die Gruppierung erfolgt nach dieser Spalte
+        - `Eltern 1 - Name`: Der vollständige Name des zahlenden Mitglieds/Elternteils. **Die Gruppierung erfolgt nach dieser Spalte        
+        - `Eltern 1 - Emailadresse`: Die E-Mail des Mitglieds/Elternteils. **Die Gruppierung erfolgt nach dieser Spalte
+        - `Name Kind`:  Der vollständige Name des Kindes.
+        - `In Klasse`: Die Bezeichnung der Klasse des Kindes

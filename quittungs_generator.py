@@ -140,10 +140,10 @@ def generate_receipts():
         
         df = pd.read_excel(excel_path)
         
-        df.dropna(subset=['Mitglied', 'Kind'], inplace=True)
-        df['Mitglied'] = df['Mitglied'].astype(str).str.strip()
+        df.dropna(subset=['Eltern 1 - Emailadresse', 'Name Kind'], inplace=True)
+        df['Eltern 1 - Emailadresse'] = df['Eltern 1 - Emailadresse'].astype(str).str.strip()
         
-        grouped = df.groupby('Mitglied')
+        grouped = df.groupby('Eltern 1 - Emailadresse')
 
         for parent_full_name, group in grouped:
             try:
@@ -151,12 +151,13 @@ def generate_receipts():
                 is_group_valid = True
                 # 1. Daten-Typ-Prüfung
                 for index, row in group.iterrows():
-                    kind_value = row['Kind']
+                    kind_value = row['Name Kind']
+                    parent_full_name = row['Eltern 1 - Name']
                     if not isinstance(kind_value, str):
                         excel_row_number = index + 2
                         error_message = (
                             f"Mitglied: '{parent_full_name}'\n"
-                            f"Grund: Ungültiger Datentyp in Spalte 'Kind' (Excel-Zeile {excel_row_number}).\n"
+                            f"Grund: Ungültiger Datentyp in Spalte 'Name Kind' (Excel-Zeile {excel_row_number}).\n"
                             f"Gefunden: '{kind_value}' (Typ: {type(kind_value).__name__})"
                         )
                         errors_found.append(error_message)
@@ -167,13 +168,13 @@ def generate_receipts():
                     continue # Überspringe diesen Eintrag und gehe zum nächsten in der Schleife
 
                 # 2. Status-Prüfung
-                if group['Klasse'].isin(['Abgemeldet', 'Warteliste']).any():
+                if group['In Klasse'].isin(['Warteliste','', ' ']).any():
                     continue
 
                 # --- Generierung (nur für valide Einträge) ---
                 doc = Document(template_path)
                 num_children = len(group)
-                children_names = " und ".join([str(name) for name in group['Kind']])
+                children_names = " und ".join([str(name) for name in group['Name Kind']])
 
                 total_school_fee = sum(child_fees.get(i, 0) for i in range(1, num_children + 1))
                 total_amount = total_school_fee + membership_fee
@@ -198,7 +199,7 @@ def generate_receipts():
 
                 parent_name = parent_full_name.replace(" ", "_")
                 # Nehmen Sie die erste Klasse aus der Gruppe für den Ordnernamen
-                klasse = str(group['Klasse'].iloc[0])
+                klasse = str(group['In Klasse'].iloc[0])
                 outdir_class = os.path.join(output_dir, klasse)
                 if not os.path.exists(outdir_class):
                     os.makedirs(outdir_class)
