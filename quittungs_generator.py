@@ -359,7 +359,7 @@ def generate_pdf_receipts_task(output_dir):
                 pdf_files = sorted([f for f in os.listdir(class_folder) if f.endswith('.pdf')])
                 
                 if pdf_files:
-                    final_pdf_path = os.path.join(output_dir, f"Sammelquittung_Klasse_{klasse_name}.pdf")
+                    final_pdf_path = os.path.join(output_dir, f"Sammel_PDF_Klasse_{klasse_name}.pdf")
                     for pdf in pdf_files:
                         merger.append(os.path.join(class_folder, pdf))
                         
