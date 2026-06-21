@@ -9,10 +9,21 @@ import pandas as pd
 from docx import Document
 import os
 import sys
+import shutil
 import threading
 from datetime import datetime
 from num2words import num2words
 
+# --- NEU: FIX FÜR DIE .EXE DATEI (NOCONSOLE) ---
+# Verhindert den Absturz, weil docx2pdf versucht, in eine unsichtbare Konsole zu schreiben
+class DummyOutput:
+    def write(self, x): pass
+    def flush(self): pass
+
+if sys.stdout is None:
+    sys.stdout = DummyOutput()
+if sys.stderr is None:
+    sys.stderr = DummyOutput()
 # --- IMPORTE FÜR PDF ---
 try:
     from docx2pdf import convert
@@ -489,7 +500,7 @@ btn_generate_pdf = tk.Button(button_frame, text="📄 2. PDFs generieren", font=
 btn_generate_pdf.pack(side=tk.LEFT, padx=5, ipadx=5, ipady=5)
 
 # --- NEU: Abbrechen-Button (Standardmäßig deaktiviert) ---
-btn_cancel = tk.Button(button_frame, text="🛑 Abbrechen", font=("Helvetica", 11, "bold"), command=cancel_process, bg="#ad645f", fg="white", state=tk.DISABLED)
+btn_cancel = tk.Button(button_frame, text="🛑 Abbrechen", font=("Helvetica", 11, "bold"), command=cancel_process, bg="#cc3025", fg="white", state=tk.DISABLED)
 btn_cancel.pack(side=tk.LEFT, padx=5, ipadx=5, ipady=5)
 
 # Status-Text
@@ -503,6 +514,6 @@ progress_bar = ttk.Progressbar(frame, variable=progress_var, mode='determinate')
 progress_bar.grid(row=11, column=0, columnspan=2, sticky="ew", pady=(0, 15))
 
 # Info-Feld
-tk.Label(frame, text="Version 17.06.2026; I. Zlat.", font=("Helvetica", 8), fg="gray").grid(row=12, column=0, columnspan=2, pady=(0, 5))
+tk.Label(frame, text="Version 21.06.2026; I. Zlat.", font=("Helvetica", 8), fg="gray").grid(row=12, column=0, columnspan=2, pady=(0, 5))
 
 root.mainloop()
