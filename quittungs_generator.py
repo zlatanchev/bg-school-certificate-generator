@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Quittungs-Generator für Schulgebühren - Finale Version mit flexibler, linksbündiger GUI und Info-Feld
+Quittungs-Generator für Schulgebühren - PDF & Word Edition
 """
 
 import tkinter as tk
@@ -9,8 +9,17 @@ import pandas as pd
 from docx import Document
 import os
 import sys
+import shutil
 from datetime import datetime
 from num2words import num2words
+
+# --- IMPORTE FÜR PDF ---
+try:
+    from docx2pdf import convert
+    from pypdf import PdfWriter
+    HAS_PDF_TOOLS = True
+except ImportError:
+    HAS_PDF_TOOLS = False
 
 # Versuche Pillow zu importieren (für die Bildskalierung)
 try:
@@ -91,6 +100,10 @@ def load_prices(filepath):
     return child_fees, float(membership_fee), str(school_year)
 
 def generate_receipts():
+    if not HAS_PDF_TOOLS:
+        messagebox.showerror("Fehlende Pakete", "Bitte installiere die PDF-Erweiterungen im Terminal:\n\npip install docx2pdf pypdf")
+        return
+
     excel_path = excel_path_var.get()
     template_path = template_path_var.get()
     prices_path = prices_path_var.get()
@@ -101,8 +114,10 @@ def generate_receipts():
         return
 
     errors_found = []
+    class_folders = set()
     quittungs_nr = 1
     
+    # 1. Einzel-Dateien (Word) generieren
     try:
         child_fees, membership_fee, school_year = load_prices(prices_path)
         df = pd.read_excel(excel_path)
@@ -118,19 +133,13 @@ def generate_receipts():
                     parent_full_name = row['Eltern 1 - Name']
                     if not isinstance(kind_value, str):
                         excel_row_number = index + 2
-                        error_message = (
-                            f"Mitglied: '{parent_full_name}'\n"
-                            f"Grund: Ungültiger Datentyp in Spalte 'Name Kind' (Excel-Zeile {excel_row_number}).\n"
-                            f"Gefunden: '{kind_value}' (Typ: {type(kind_value).__name__})"
-                        )
-                        errors_found.append(error_message)
+                        errors_found.append(f"Mitglied: '{parent_full_name}'\nGrund: Ungültiger Datentyp in Spalte 'Name Kind' (Zeile {excel_row_number}).")
                         is_group_valid = False
                         break 
                 
                 if not is_group_valid:
                     continue 
-
-                if group['In Klasse'].isin(['Warteliste','', ' ']).any():
+                if group['In Klasse'].isin(['Warteliste', '', ' ']).any():
                     continue
 
                 doc = Document(template_path)
@@ -145,78 +154,114 @@ def generate_receipts():
                 total_school_fee = sum(child_fees.get(i, 0) for i in range(1, num_children + 1))
                 total_amount = total_school_fee + membership_fee
                 
-                gebuehr_wort = num2words(int(total_school_fee), lang='de')
-                mitglied_wort = num2words(int(membership_fee), lang='de')
-                gesamt_wort = num2words(int(total_amount), lang='de')
-
                 replacements = {
                     "{{ELTERN_NAME}}": parent_full_name,
                     "{{KINDER_NAMEN}}": children_names, "{{NR}}": f"{quittungs_nr:03d}",
                     "{{DATUM}}": datetime.now().strftime("%d.%m.%Y"), "{{SCHULJAHR}}": school_year,
                     "{{BETRAG_GEBUEHR}}": f"{total_school_fee:,.2f} EUR".replace(",", "X").replace(".", ",").replace("X", "."),
                     "{{GESAMTBETRAG}}": f"{total_amount:,.2f} EUR".replace(",", "X").replace(".", ",").replace("X", "."),
-                    "{{BETRAG_GEBUEHR_WORT}}": f"{gebuehr_wort} Euro", "{{GESAMTBETRAG_WORT}}": f"{gesamt_wort} Euro",
+                    "{{BETRAG_GEBUEHR_WORT}}": f"{num2words(int(total_school_fee), lang='de')} Euro", 
+                    "{{GESAMTBETRAG_WORT}}": f"{num2words(int(total_amount), lang='de')} Euro",
                     "{{BETRAG_MITGLIED}}": f"{membership_fee:,.2f} EUR".replace(",", "X").replace(".", ",").replace("X", "."),
-                    "{{BETRAG_MITGLIED_WORT}}": f"{mitglied_wort} Euro",
+                    "{{BETRAG_MITGLIED_WORT}}": f"{num2words(int(membership_fee), lang='de')} Euro",
                 }
 
                 for old, new in replacements.items():
                     docx_replace_text(doc, old, str(new))
 
-                parent_name = parent_full_name.replace(" ", "_")
+                # Ordner pro Klasse im Ausgabeordner anlegen (Kein temp_ mehr)
                 klasse = str(group['In Klasse'].iloc[0])
-                outdir_class = os.path.join(output_dir, klasse)
+                safe_klasse = klasse.replace("/", "_").replace("\\", "_")
+                outdir_class = os.path.join(output_dir, safe_klasse)
+                
                 if not os.path.exists(outdir_class):
                     os.makedirs(outdir_class)
+                class_folders.add(outdir_class)
 
+                parent_name = parent_full_name.replace(" ", "_")
                 output_filename = os.path.join(outdir_class, f"Quittung_{parent_name}_{quittungs_nr:03d}.docx")
-                if os.path.exists(output_filename):
-                    os.remove(output_filename)
                 doc.save(output_filename)
 
                 quittungs_nr += 1
 
             except Exception as e:
-                error_message = f"Mitglied: '{parent_full_name}'\nGrund: Unerwarteter Fehler -> {e}"
-                errors_found.append(error_message)
+                errors_found.append(f"Mitglied: '{parent_full_name}'\nGrund: Unerwarteter Fehler -> {e}")
                 continue 
 
     except Exception as e:
         messagebox.showerror("Kritischer Fehler", f"Ein grundlegender Fehler hat die Verarbeitung gestoppt:\n{e}")
         return
 
-    successful_count = quittungs_nr - 1
+    # 2. PDFs erstellen und pro Klasse zusammenfügen
+    pdf_count = 0
+    try:
+        for class_folder in class_folders:
+            klasse_name = os.path.basename(class_folder)
+            
+            try:
+                # Wandelt alle DOCX im Klassenordner in PDFs um (erzeugt .pdf Dateien direkt im Ordner)
+                convert(class_folder)
+                
+                merger = PdfWriter()
+                # Alle soeben erstellten Einzel-PDFs im Ordner sammeln
+                pdf_files = sorted([f for f in os.listdir(class_folder) if f.endswith('.pdf')])
+                
+                if pdf_files:
+                    final_pdf_path = os.path.join(output_dir, f"Sammelquittung_Klasse_{klasse_name}.pdf")
+                    for pdf in pdf_files:
+                        merger.append(os.path.join(class_folder, pdf))
+                        
+                    merger.write(final_pdf_path)
+                    merger.close()
+                    pdf_count += 1
+                    
+                    # NUR die temporären Einzel-PDFs löschen. Die Word-Dateien (.docx) bleiben erhalten!
+                    for pdf in pdf_files:
+                        try:
+                            os.remove(os.path.join(class_folder, pdf))
+                        except Exception as e:
+                            print(f"Konnte temporäre PDF nicht löschen: {e}")
+                    
+            except Exception as e:
+                errors_found.append(f"Fehler bei PDF-Erstellung für Klasse {klasse_name}: {e}\n(Ist Microsoft Word installiert?)")
+                    
+    except Exception as e:
+        errors_found.append(f"Kritischer Fehler beim Zusammenfügen der PDFs: {e}")
+
+    # 3. Abschlussmeldung
     if not errors_found:
-        messagebox.showinfo("Erfolg", f"{successful_count} Quittung(en) erfolgreich erstellt!")
+        messagebox.showinfo("Erfolg", f"Vorgang abgeschlossen!\n\nDie einzelnen Word-Dateien wurden in den Klassenordnern behalten.\nZusätzlich wurden {pdf_count} Sammel-PDF(s) im Ausgabeordner erstellt.")
     else:
         error_summary = "\n\n------------------------------------\n\n".join(errors_found)
         final_message = (
-            f"{successful_count} Quittung(en) wurden erstellt.\n\n"
-            f"Es gab {len(errors_found)} Fehler in der Excel-Datei. Die folgenden Einträge wurden übersprungen:\n\n"
-            f"{error_summary}"
+            f"{pdf_count} Sammel-PDF(s) wurden erstellt.\n\n"
+            f"Es gab jedoch Probleme/Fehler:\n\n{error_summary}"
         )
-        messagebox.showwarning("Vorgang abgeschlossen (mit Fehlern)", final_message)
+        messagebox.showwarning("Vorgang abgeschlossen (mit Warnungen)", final_message)
 
 # --- GUI Code ---
 def select_excel_file():
     filepath = filedialog.askopenfilename(filetypes=[("Excel-Dateien", "*.xlsx *.xls")])
-    if filepath: excel_path_var.set(filepath)
+    if filepath:
+        excel_path_var.set(filepath)
 
 def select_template_file():
     filepath = filedialog.askopenfilename(filetypes=[("Word-Dokumente", "*.docx")])
-    if filepath: template_path_var.set(filepath)
+    if filepath:
+        template_path_var.set(filepath)
 
 def select_prices_file():
     filepath = filedialog.askopenfilename(filetypes=[("Excel-Dateien", "*.xlsx *.xls")])
-    if filepath: prices_path_var.set(filepath)
+    if filepath:
+        prices_path_var.set(filepath)
 
 def select_output_dir():
     dirpath = filedialog.askdirectory()
-    if dirpath: output_dir_var.set(dirpath)
+    if dirpath:
+        output_dir_var.set(dirpath)
 
 root = tk.Tk()
-root.title("Quittungs-Generator (Auto-Detect Version)")
-# Höhe leicht erhöht, um Platz für das Info-Feld zu schaffen
+root.title("Quittungs-Generator (PDF & Word Edition)")
 root.geometry("600x500") 
 
 excel_path_var = tk.StringVar()
@@ -233,7 +278,6 @@ frame.grid_columnconfigure(1, weight=0)
 
 initialize_paths()
 
-# --- Logo laden, skalieren und einbinden ---
 logo_path = logo_path_var.get()
 if os.path.exists(logo_path):
     if HAS_PILLOW:
@@ -249,13 +293,11 @@ if os.path.exists(logo_path):
             img.thumbnail((max_width, max_height), resample_filter)
             logo_img = ImageTk.PhotoImage(img)
             root.logo_img = logo_img 
-            
             tk.Label(frame, image=logo_img).grid(row=0, column=0, columnspan=2, pady=(0, 15))
         except Exception as e:
-            print(f"Konnte Logo nicht verarbeiten: {e}")
             tk.Label(frame, text="[Fehler bei der Logo-Verarbeitung]").grid(row=0, column=0, columnspan=2, pady=(0, 15))
     else:
-        tk.Label(frame, text="[Bitte 'Pillow' installieren (pip install Pillow) für Logo-Skalierung]", fg="red").grid(row=0, column=0, columnspan=2, pady=(0, 15))
+        tk.Label(frame, text="[Bitte 'Pillow' installieren für Logo-Skalierung]", fg="red").grid(row=0, column=0, columnspan=2, pady=(0, 15))
 
 # Eingabefelder und Buttons
 tk.Label(frame, text="1. Excel-Datei (Schülerliste) auswählen:").grid(row=1, column=0, sticky="w", pady=2)
