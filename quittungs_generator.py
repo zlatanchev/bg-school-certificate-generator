@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Quittungs-Generator für Schulgebühren - PDF & Word Edition mit Fortschrittsbalken
+Quittungs-Generator für Schulgebühren - PDF & Word Edition (Zweistufiger Prozess)
 """
 
 import tkinter as tk
@@ -99,11 +99,15 @@ def load_prices(filepath):
     
     return child_fees, float(membership_fee), str(school_year)
 
-def generate_receipts():
-    if not HAS_PDF_TOOLS:
-        messagebox.showerror("Fehlende Pakete", "Bitte installiere die PDF-Erweiterungen im Terminal:\n\npip install docx2pdf pypdf")
-        return
+def toggle_buttons(state):
+    """Aktiviert oder deaktiviert beide Buttons"""
+    btn_generate_word.config(state=state)
+    btn_generate_pdf.config(state=state)
 
+# ==========================================
+# PHASE 1: WORD-DOKUMENTE GENERIEREN
+# ==========================================
+def generate_word_receipts():
     excel_path = excel_path_var.get()
     template_path = template_path_var.get()
     prices_path = prices_path_var.get()
@@ -113,8 +117,7 @@ def generate_receipts():
         messagebox.showerror("Fehler", "Bitte alle Pfade auswählen!")
         return
 
-    # Deaktiviere Button während der Generierung
-    btn_generate.config(state=tk.DISABLED)
+    toggle_buttons(tk.DISABLED)
     progress_var.set(0)
     
     errors_found = []
@@ -122,22 +125,19 @@ def generate_receipts():
     quittungs_nr = 1
     
     try:
-        # 1. Daten einlesen und Vorbereitung
         child_fees, membership_fee, school_year = load_prices(prices_path)
         df = pd.read_excel(excel_path)
         df.dropna(subset=['Eltern 1 - Emailadresse', 'Name Kind'], inplace=True)
         df['Eltern 1 - Emailadresse'] = df['Eltern 1 - Emailadresse'].astype(str).str.strip()
         grouped = df.groupby('Eltern 1 - Emailadresse')
         
-        # Max. Fortschritt berechnen (1x für Word generieren + 1x für PDF konvertieren pro Familie)
         total_parents = len(grouped)
-        progress_bar['maximum'] = total_parents * 2
+        progress_bar['maximum'] = total_parents
         current_progress = 0
 
-        status_var.set(f"Starte Verarbeitung von {total_parents} Einträgen...")
+        status_var.set(f"Starte Generierung von {total_parents} Word-Quittungen...")
         root.update()
 
-        # 2. Einzel-Dateien (Word) generieren
         for parent_email, group in grouped:
             try:
                 parent_full_name = str(group['Eltern 1 - Name'].iloc[0]).strip()
@@ -183,7 +183,6 @@ def generate_receipts():
                 for old, new in replacements.items():
                     docx_replace_text(doc, old, str(new))
 
-                # Ordner pro Klasse im Ausgabeordner anlegen
                 klasse = str(group['In Klasse'].iloc[0])
                 safe_klasse = klasse.replace("/", "_").replace("\\", "_")
                 outdir_class = os.path.join(output_dir, safe_klasse)
@@ -198,33 +197,106 @@ def generate_receipts():
 
                 quittungs_nr += 1
                 
-                # Fortschritt aktualisieren
+                # Fortschritt aktualisieren (Pro Quittung)
                 current_progress += 1
                 progress_var.set(current_progress)
-                status_var.set(f"Erstelle Word-Quittungen... ({current_progress}/{total_parents})")
+                status_var.set(f"Erstelle Word-Dokumente... ({current_progress}/{total_parents})")
                 root.update()
 
             except Exception as e:
                 errors_found.append(f"Mitglied: '{parent_email}'\nGrund: Unerwarteter Fehler -> {e}")
                 continue 
 
-        # 3. PDFs erstellen und pro Klasse zusammenfügen
+        # Abschlussmeldung Word
+        progress_var.set(progress_bar['maximum'])
+        generierte_quittungen = quittungs_nr - 1
+        anzahl_klassen = len(class_folders)
+
+        zusammenfassung = (
+            f"Statistik:\n"
+            f"➜ {generierte_quittungen} Quittungen (Familien) erstellt.\n"
+            f"➜ Aufgeteilt in {anzahl_klassen} verschiedene Klassen."
+        )
+        
+        if not errors_found:
+            status_var.set("Word-Generierung erfolgreich abgeschlossen!")
+            messagebox.showinfo("Schritt 1 abgeschlossen", f"Word-Dateien erfolgreich generiert!\n\n{zusammenfassung}\n\nDu kannst die Dateien nun im Ausgabeordner kontrollieren und bei Bedarf anpassen, bevor du Schritt 2 ausführst.")
+        else:
+            status_var.set("Mit Warnungen abgeschlossen.")
+            error_summary = "\n\n------------------------------------\n\n".join(errors_found)
+            final_message = (
+                f"Word-Dateien wurden generiert.\n\n{zusammenfassung}\n\n"
+                f"Es gab jedoch Probleme/Fehler:\n\n{error_summary}"
+            )
+            messagebox.showwarning("Word-Generierung (mit Warnungen)", final_message)
+
+    except Exception as e:
+        status_var.set("Kritischer Fehler aufgetreten!")
+        messagebox.showerror("Kritischer Fehler", f"Ein Fehler hat die Verarbeitung gestoppt:\n{e}")
+    finally:
+        toggle_buttons(tk.NORMAL)
+
+
+# ==========================================
+# PHASE 2: PDFS GENERIEREN & ZUSAMMENFÜGEN
+# ==========================================
+def generate_pdf_receipts():
+    if not HAS_PDF_TOOLS:
+        messagebox.showerror("Fehlende Pakete", "Bitte installiere die PDF-Erweiterungen im Terminal:\n\npip install docx2pdf pypdf")
+        return
+
+    output_dir = output_dir_var.get()
+    if not output_dir:
+        messagebox.showerror("Fehler", "Bitte den Ausgabeordner auswählen!")
+        return
+
+    toggle_buttons(tk.DISABLED)
+    progress_var.set(0)
+    errors_found = []
+
+    try:
+        # Suche im Ausgabeordner nach Klassenordnern, die Word-Dateien enthalten
+        class_folders = []
+        total_docx_files = 0
+        
+        if os.path.exists(output_dir):
+            for element in os.listdir(output_dir):
+                element_path = os.path.join(output_dir, element)
+                if os.path.isdir(element_path):
+                    # Zähle Word Dateien im Ordner (ignoriere temporäre ~$ Dateien)
+                    docx_files = [f for f in os.listdir(element_path) if f.endswith('.docx') and not f.startswith('~')]
+                    if docx_files:
+                        class_folders.append(element_path)
+                        total_docx_files += len(docx_files)
+
+        if not class_folders:
+            messagebox.showinfo("Info", "Keine Klassen-Ordner mit Word-Dateien im Ausgabeordner gefunden.\nBitte führe zuerst Schritt 1 aus.")
+            toggle_buttons(tk.NORMAL)
+            status_var.set("Warte auf Start...")
+            return
+
+        # Fortschrittsbalken-Setup: 1 Schritt pro Klasse
+        anzahl_klassen = len(class_folders)
+        progress_bar['maximum'] = anzahl_klassen
+        current_progress = 0
         pdf_count = 0
+
+        status_var.set(f"Starte PDF-Konvertierung für {anzahl_klassen} Klassen...")
+        root.update()
+
         for class_folder in class_folders:
             klasse_name = os.path.basename(class_folder)
             
-            # Zähle Dateien für den PDF-Fortschritts-Schritt
-            docx_count = len([f for f in os.listdir(class_folder) if f.endswith('.docx') and not f.startswith('~')])
-            
-            status_var.set(f"Konvertiere Klasse {klasse_name} in PDFs...")
+            # Status-Update (Pro Klasse)
+            status_var.set(f"Konvertiere Klasse {klasse_name} in PDFs... ({current_progress + 1}/{anzahl_klassen})")
             root.update()
             
             try:
-                # Wandelt alle DOCX im Klassenordner in PDFs um
+                # 1. Wandelt den gesamten Ordner in PDFs um
                 convert(class_folder)
                 
+                # 2. PDFs zusammenfügen
                 merger = PdfWriter()
-                # Alle soeben erstellten Einzel-PDFs im Ordner sammeln
                 pdf_files = sorted([f for f in os.listdir(class_folder) if f.endswith('.pdf')])
                 
                 if pdf_files:
@@ -236,45 +308,47 @@ def generate_receipts():
                     merger.close()
                     pdf_count += 1
                     
-                    # NUR die temporären Einzel-PDFs löschen
+                    # 3. Temporäre Einzel-PDFs löschen
                     for pdf in pdf_files:
                         try:
                             os.remove(os.path.join(class_folder, pdf))
                         except Exception as e:
                             print(f"Konnte temporäre PDF nicht löschen: {e}")
                 
-                # Fortschritt aktualisieren
-                current_progress += docx_count
-                if current_progress > progress_bar['maximum']:
-                    progress_var.set(progress_bar['maximum'])
-                else:
-                    progress_var.set(current_progress)
+                # Fortschrittsbalken aktualisieren
+                current_progress += 1
+                progress_var.set(current_progress)
                 root.update()
                     
             except Exception as e:
-                errors_found.append(f"Fehler bei PDF-Erstellung für Klasse {klasse_name}: {e}\n(Ist Microsoft Word installiert?)")
+                errors_found.append(f"Fehler bei PDF-Erstellung für Klasse {klasse_name}: {e}\n(Ist Microsoft Word geschlossen und bereit?)")
 
-        # 4. Abschlussmeldung
-        progress_var.set(progress_bar['maximum']) # Balken voll machen
+        # Abschlussmeldung PDF
+        progress_var.set(progress_bar['maximum'])
         
+        zusammenfassung = (
+            f"Statistik:\n"
+            f"➜ {total_docx_files} einzelne Quittungen verarbeitet.\n"
+            f"➜ {pdf_count} Sammel-PDFs (Klassen) erfolgreich im Ausgabeordner erstellt."
+        )
+
         if not errors_found:
-            status_var.set("Erfolgreich abgeschlossen!")
-            messagebox.showinfo("Erfolg", f"Vorgang abgeschlossen!\n\nDie einzelnen Word-Dateien wurden in den Klassenordnern behalten.\nZusätzlich wurden {pdf_count} Sammel-PDF(s) im Ausgabeordner erstellt.")
+            status_var.set("PDF-Sammelquittungen erfolgreich generiert!")
+            messagebox.showinfo("Schritt 2 abgeschlossen", f"PDF-Prozess erfolgreich beendet!\n\n{zusammenfassung}")
         else:
             status_var.set("Mit Warnungen abgeschlossen.")
             error_summary = "\n\n------------------------------------\n\n".join(errors_found)
             final_message = (
-                f"{pdf_count} Sammel-PDF(s) wurden erstellt.\n\n"
+                f"PDF-Sammelquittungen wurden generiert.\n\n{zusammenfassung}\n\n"
                 f"Es gab jedoch Probleme/Fehler:\n\n{error_summary}"
             )
-            messagebox.showwarning("Vorgang abgeschlossen (mit Warnungen)", final_message)
+            messagebox.showwarning("PDF-Generierung (mit Warnungen)", final_message)
 
     except Exception as e:
         status_var.set("Kritischer Fehler aufgetreten!")
-        messagebox.showerror("Kritischer Fehler", f"Ein grundlegender Fehler hat die Verarbeitung gestoppt:\n{e}")
+        messagebox.showerror("Kritischer Fehler", f"Ein Fehler hat die PDF-Verarbeitung gestoppt:\n{e}")
     finally:
-        # Button am Ende in jedem Fall wieder aktivieren
-        btn_generate.config(state=tk.NORMAL)
+        toggle_buttons(tk.NORMAL)
 
 
 # --- GUI Code ---
@@ -300,7 +374,6 @@ def select_output_dir():
 
 root = tk.Tk()
 root.title("Quittungs-Generator (PDF & Word Edition)")
-# Höhe leicht erhöht für Fortschrittsbalken
 root.geometry("600x550") 
 
 excel_path_var = tk.StringVar()
@@ -355,9 +428,15 @@ tk.Label(frame, text="4. Ausgabeordner auswählen:").grid(row=7, column=0, stick
 tk.Entry(frame, textvariable=output_dir_var, width=60).grid(row=8, column=0, padx=(0, 5), sticky="ew")
 tk.Button(frame, text="Durchsuchen...", command=select_output_dir).grid(row=8, column=1)
 
-# Haupt-Button (Muss einer Variable zugewiesen werden, damit wir ihn deaktivieren können)
-btn_generate = tk.Button(frame, text="🚀 Quittungen generieren", font=("Helvetica", 12, "bold"), command=generate_receipts, bg="#4CAF50", fg="white")
-btn_generate.grid(row=9, column=0, columnspan=2, pady=(20, 5), ipadx=10, ipady=5)
+# --- NEU: Frame für die zwei Buttons ---
+button_frame = tk.Frame(frame)
+button_frame.grid(row=9, column=0, columnspan=2, pady=(20, 5))
+
+btn_generate_word = tk.Button(button_frame, text="📝 1. Word generieren", font=("Helvetica", 11, "bold"), command=generate_word_receipts, bg="#2196F3", fg="white")
+btn_generate_word.pack(side=tk.LEFT, padx=10, ipadx=10, ipady=5)
+
+btn_generate_pdf = tk.Button(button_frame, text="📄 2. PDFs generieren", font=("Helvetica", 11, "bold"), command=generate_pdf_receipts, bg="#f44336", fg="white")
+btn_generate_pdf.pack(side=tk.LEFT, padx=10, ipadx=10, ipady=5)
 
 # --- NEU: Status-Text ---
 status_var = tk.StringVar()
