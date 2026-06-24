@@ -24,11 +24,13 @@ if sys.stdout is None:
     sys.stdout = DummyOutput()
 if sys.stderr is None:
     sys.stderr = DummyOutput()
+# -----------------------------------------------
+
 # --- IMPORTE FÜR PDF ---
 try:
     from docx2pdf import convert
     from pypdf import PdfWriter
-    import pythoncom  # WICHTIG: Wird für Windows COM-Threading benötigt (Steuerung von Word aus einem Thread)
+    import pythoncom  # WICHTIG: Wird für Windows COM-Threading benötigt
     HAS_PDF_TOOLS = True
 except ImportError:
     HAS_PDF_TOOLS = False
@@ -130,7 +132,6 @@ def cancel_process():
     status_var.set("Abbruch wird eingeleitet... Bitte warten.")
     btn_cancel.config(state=tk.DISABLED)
 
-# Hilfsfunktion, um Nachrichten aus dem Thread sicher in der GUI anzuzeigen
 def show_message_threadsafe(title, msg, is_error=False, is_warning=False):
     if is_error:
         messagebox.showerror(title, msg)
@@ -159,25 +160,29 @@ def start_word_generation():
     toggle_buttons(running=True)
     progress_var.set(0)
     
-    # Thread starten
     threading.Thread(target=generate_word_receipts_task, args=(excel_path, template_path, prices_path, output_dir), daemon=True).start()
 
 def generate_word_receipts_task(excel_path, template_path, prices_path, output_dir):
     global cancel_flag
     errors_found = []
     class_folders = set()
-    quittungs_nr = 1
+    quittungs_nr = 1 # Der globale Zähler
     
     try:
         child_fees, membership_fee, school_year = load_prices(prices_path)
+        
         df = pd.read_excel(excel_path)
         df.dropna(subset=['Eltern 1 - Emailadresse', 'Name Kind'], inplace=True)
         df['Eltern 1 - Emailadresse'] = df['Eltern 1 - Emailadresse'].astype(str).str.strip()
-        grouped = df.groupby('Eltern 1 - Emailadresse')
+        
+        # DataFrame nach Klassen sortieren, damit die Nummern kontinuierlich steigen
+        df['In Klasse Sortierung'] = df['In Klasse'].astype(str)
+        df.sort_values(by='In Klasse Sortierung', inplace=True)
+        
+        grouped = df.groupby('Eltern 1 - Emailadresse', sort=False)
         
         total_parents = len(grouped)
         
-        # UI Aktualisierung
         root.after(0, lambda: progress_bar.config(maximum=total_parents))
         root.after(0, lambda: status_var.set(f"Starte Generierung von {total_parents} Word-Quittungen..."))
         
@@ -214,10 +219,18 @@ def generate_word_receipts_task(excel_path, template_path, prices_path, output_d
                 total_school_fee = sum(child_fees.get(i, 0) for i in range(1, num_children + 1))
                 total_amount = total_school_fee + membership_fee
                 
+                klasse = str(group['In Klasse'].iloc[0])
+                safe_klasse = klasse.replace("/", "_").replace("\\", "_")
+                
+                # GLOBAL & REIN NUMERISCH
+                eindeutige_nummer = f"{quittungs_nr:03d}"
+                
                 replacements = {
                     "{{ELTERN_NAME}}": parent_full_name,
-                    "{{KINDER_NAMEN}}": children_names, "{{NR}}": f"{quittungs_nr:03d}",
-                    "{{DATUM}}": datetime.now().strftime("%d.%m.%Y"), "{{SCHULJAHR}}": school_year,
+                    "{{KINDER_NAMEN}}": children_names, 
+                    "{{NR}}": eindeutige_nummer, 
+                    "{{DATUM}}": datetime.now().strftime("%d.%m.%Y"), 
+                    "{{SCHULJAHR}}": str(school_year),
                     "{{BETRAG_GEBUEHR}}": f"{total_school_fee:,.2f} EUR".replace(",", "X").replace(".", ",").replace("X", "."),
                     "{{GESAMTBETRAG}}": f"{total_amount:,.2f} EUR".replace(",", "X").replace(".", ",").replace("X", "."),
                     "{{BETRAG_GEBUEHR_WORT}}": f"{num2words(int(total_school_fee), lang='de')} Euro", 
@@ -229,8 +242,6 @@ def generate_word_receipts_task(excel_path, template_path, prices_path, output_d
                 for old, new in replacements.items():
                     docx_replace_text(doc, old, str(new))
 
-                klasse = str(group['In Klasse'].iloc[0])
-                safe_klasse = klasse.replace("/", "_").replace("\\", "_")
                 outdir_class = os.path.join(output_dir, safe_klasse)
                 
                 if not os.path.exists(outdir_class):
@@ -238,12 +249,17 @@ def generate_word_receipts_task(excel_path, template_path, prices_path, output_d
                 class_folders.add(outdir_class)
 
                 safe_parent_name = parent_full_name.replace(" ", "_").replace("/", "_")
-                output_filename = os.path.join(outdir_class, f"Quittung_{safe_parent_name}_{quittungs_nr:03d}.docx")
+                
+                # --- NEU: Dateiname mit Erstellungsjahr, Quittungs-Nummer und Name ---
+                jahr_erstellung = datetime.now().strftime("%Y")
+                dateiname = f"{jahr_erstellung}_Quittung_{eindeutige_nummer}_{safe_parent_name}.docx"
+                output_filename = os.path.join(outdir_class, dateiname)
+                
                 doc.save(output_filename)
 
+                # Zähler für die nächste Familie erhöhen
                 quittungs_nr += 1
                 
-                # Fortschritt aktualisieren
                 current_progress += 1
                 root.after(0, progress_var.set, current_progress)
                 root.after(0, status_var.set, f"Erstelle Word-Dokumente... ({current_progress}/{total_parents})")
@@ -258,6 +274,7 @@ def generate_word_receipts_task(excel_path, template_path, prices_path, output_d
 
         # Abschlussmeldung Word
         root.after(0, progress_var.set, total_parents)
+        
         generierte_quittungen = quittungs_nr - 1
         anzahl_klassen = len(class_folders)
 
@@ -305,14 +322,12 @@ def start_pdf_generation():
     toggle_buttons(running=True)
     progress_var.set(0)
     
-    # Thread starten
     threading.Thread(target=generate_pdf_receipts_task, args=(output_dir,), daemon=True).start()
 
 def generate_pdf_receipts_task(output_dir):
     global cancel_flag
     errors_found = []
 
-    # WICHTIG: Windows COM für diesen Thread initialisieren (für Microsoft Word Steuerung)
     if HAS_PDF_TOOLS:
         pythoncom.CoInitialize()
 
@@ -336,7 +351,6 @@ def generate_pdf_receipts_task(output_dir):
 
         anzahl_klassen = len(class_folders)
         
-        # UI Setup
         root.after(0, lambda: progress_bar.config(maximum=anzahl_klassen))
         root.after(0, lambda: status_var.set(f"Starte PDF-Konvertierung für {anzahl_klassen} Klassen..."))
 
@@ -366,9 +380,6 @@ def generate_pdf_receipts_task(output_dir):
                     merger.write(final_pdf_path)
                     merger.close()
                     pdf_count += 1
-                    
-                    # HINWEIS: Die Löschung der einzelnen PDFs wurde wie gewünscht ENTFERNT.
-                    # Einzel-PDFs bleiben neben den Word-Dateien bestehen.
                 
                 current_progress += 1
                 root.after(0, progress_var.set, current_progress)
@@ -406,7 +417,6 @@ def generate_pdf_receipts_task(output_dir):
         root.after(0, status_var.set, "Kritischer Fehler aufgetreten!")
         root.after(0, show_message_threadsafe, "Kritischer Fehler", f"Ein Fehler hat die PDF-Verarbeitung gestoppt:\n{e}", True)
     finally:
-        # COM Ressourcen wieder freigeben
         if HAS_PDF_TOOLS:
             pythoncom.CoUninitialize()
         root.after(0, toggle_buttons, False)
@@ -489,7 +499,7 @@ tk.Label(frame, text="4. Ausgabeordner auswählen:").grid(row=7, column=0, stick
 tk.Entry(frame, textvariable=output_dir_var, width=60).grid(row=8, column=0, padx=(0, 5), sticky="ew")
 tk.Button(frame, text="Durchsuchen...", command=select_output_dir).grid(row=8, column=1)
 
-# --- NEU: Frame für die Steuerungsknöpfe ---
+# Frame für die Steuerungsknöpfe
 button_frame = tk.Frame(frame)
 button_frame.grid(row=9, column=0, columnspan=2, pady=(20, 5))
 
@@ -499,7 +509,6 @@ btn_generate_word.pack(side=tk.LEFT, padx=5, ipadx=5, ipady=5)
 btn_generate_pdf = tk.Button(button_frame, text="📄 2. PDFs generieren", font=("Helvetica", 11, "bold"), command=start_pdf_generation, bg="#4CAF50", fg="white")
 btn_generate_pdf.pack(side=tk.LEFT, padx=5, ipadx=5, ipady=5)
 
-# --- NEU: Abbrechen-Button (Standardmäßig deaktiviert) ---
 btn_cancel = tk.Button(button_frame, text="🛑 Abbrechen", font=("Helvetica", 11, "bold"), command=cancel_process, bg="#cc3025", fg="white", state=tk.DISABLED)
 btn_cancel.pack(side=tk.LEFT, padx=5, ipadx=5, ipady=5)
 
@@ -514,6 +523,6 @@ progress_bar = ttk.Progressbar(frame, variable=progress_var, mode='determinate')
 progress_bar.grid(row=11, column=0, columnspan=2, sticky="ew", pady=(0, 15))
 
 # Info-Feld
-tk.Label(frame, text="Version 21.06.2026; I. Zlat.", font=("Helvetica", 8), fg="gray").grid(row=12, column=0, columnspan=2, pady=(0, 5))
+tk.Label(frame, text="Version 25.06.2026; I. Zlat.", font=("Helvetica", 8), fg="gray").grid(row=12, column=0, columnspan=2, pady=(0, 5))
 
 root.mainloop()
