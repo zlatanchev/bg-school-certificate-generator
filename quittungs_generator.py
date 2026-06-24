@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Quittungs-Generator für Schulgebühren - Threading, Cancelling & PDF/Word Edition
+Inklusive Excel-Übersichtstabelle
 """
 
 import tkinter as tk
@@ -15,7 +16,6 @@ from datetime import datetime
 from num2words import num2words
 
 # --- NEU: FIX FÜR DIE .EXE DATEI (NOCONSOLE) ---
-# Verhindert den Absturz, weil docx2pdf versucht, in eine unsichtbare Konsole zu schreiben
 class DummyOutput:
     def write(self, x): pass
     def flush(self): pass
@@ -30,19 +30,17 @@ if sys.stderr is None:
 try:
     from docx2pdf import convert
     from pypdf import PdfWriter
-    import pythoncom  # WICHTIG: Wird für Windows COM-Threading benötigt
+    import pythoncom  
     HAS_PDF_TOOLS = True
 except ImportError:
     HAS_PDF_TOOLS = False
 
-# Versuche Pillow zu importieren (für die Bildskalierung)
 try:
     from PIL import Image, ImageTk
     HAS_PILLOW = True
 except ImportError:
     HAS_PILLOW = False
 
-# Globale Variable für den Abbruch (Cancelling)
 cancel_flag = False
 
 def initialize_paths():
@@ -117,7 +115,6 @@ def load_prices(filepath):
     return child_fees, float(membership_fee), str(school_year)
 
 def toggle_buttons(running=False):
-    """Aktiviert/Deaktiviert Buttons basierend auf dem Thread-Status"""
     state = tk.DISABLED if running else tk.NORMAL
     cancel_state = tk.NORMAL if running else tk.DISABLED
     
@@ -126,7 +123,6 @@ def toggle_buttons(running=False):
     btn_cancel.config(state=cancel_state)
 
 def cancel_process():
-    """Setzt das Abbruch-Flag"""
     global cancel_flag
     cancel_flag = True
     status_var.set("Abbruch wird eingeleitet... Bitte warten.")
@@ -166,7 +162,10 @@ def generate_word_receipts_task(excel_path, template_path, prices_path, output_d
     global cancel_flag
     errors_found = []
     class_folders = set()
-    quittungs_nr = 1 # Der globale Zähler
+    quittungs_nr = 1 
+    
+    # NEU: Liste für die Excel-Übersichtstabelle
+    summary_data = []
     
     try:
         child_fees, membership_fee, school_year = load_prices(prices_path)
@@ -175,7 +174,6 @@ def generate_word_receipts_task(excel_path, template_path, prices_path, output_d
         df.dropna(subset=['Eltern 1 - Emailadresse', 'Name Kind'], inplace=True)
         df['Eltern 1 - Emailadresse'] = df['Eltern 1 - Emailadresse'].astype(str).str.strip()
         
-        # DataFrame nach Klassen sortieren, damit die Nummern kontinuierlich steigen
         df['In Klasse Sortierung'] = df['In Klasse'].astype(str)
         df.sort_values(by='In Klasse Sortierung', inplace=True)
         
@@ -222,7 +220,6 @@ def generate_word_receipts_task(excel_path, template_path, prices_path, output_d
                 klasse = str(group['In Klasse'].iloc[0])
                 safe_klasse = klasse.replace("/", "_").replace("\\", "_")
                 
-                # GLOBAL & REIN NUMERISCH
                 eindeutige_nummer = f"{quittungs_nr:03d}"
                 
                 replacements = {
@@ -250,14 +247,22 @@ def generate_word_receipts_task(excel_path, template_path, prices_path, output_d
 
                 safe_parent_name = parent_full_name.replace(" ", "_").replace("/", "_")
                 
-                # --- NEU: Dateiname mit Erstellungsjahr, Quittungs-Nummer und Name ---
                 jahr_erstellung = datetime.now().strftime("%Y")
                 dateiname = f"{jahr_erstellung}_Quittung_{eindeutige_nummer}_{safe_parent_name}.docx"
                 output_filename = os.path.join(outdir_class, dateiname)
                 
                 doc.save(output_filename)
 
-                # Zähler für die nächste Familie erhöhen
+                # NEU: Daten zur Übersichtstabelle hinzufügen
+                summary_data.append({
+                    'Quittung Nr.': eindeutige_nummer,
+                    'Eltern 1 - Name': parent_full_name,
+                    'Eltern 1 - Emailadresse': parent_email,
+                    'In Klasse': klasse,
+                    'Rechnungsbeitrag (€)': total_amount,
+                    'Namen aller Kinder': children_names
+                })
+
                 quittungs_nr += 1
                 
                 current_progress += 1
@@ -272,6 +277,16 @@ def generate_word_receipts_task(excel_path, template_path, prices_path, output_d
             root.after(0, status_var.set, "Prozess durch Benutzer abgebrochen.")
             return
 
+        # NEU: Erstelle die Übersichtstabelle in Excel am Ende von Schritt 1
+        if summary_data:
+            try:
+                summary_df = pd.DataFrame(summary_data)
+                jahr_erstellung = datetime.now().strftime("%Y")
+                summary_file = os.path.join(output_dir, f"{jahr_erstellung}_Quittungen_Uebersicht.xlsx")
+                summary_df.to_excel(summary_file, index=False)
+            except Exception as e:
+                errors_found.append(f"Fehler beim Erstellen der Übersichtstabelle: {e}")
+
         # Abschlussmeldung Word
         root.after(0, progress_var.set, total_parents)
         
@@ -281,7 +296,8 @@ def generate_word_receipts_task(excel_path, template_path, prices_path, output_d
         zusammenfassung = (
             f"Statistik:\n"
             f"➜ {generierte_quittungen} Quittungen (Familien) erstellt.\n"
-            f"➜ Aufgeteilt in {anzahl_klassen} verschiedene Klassen."
+            f"➜ Aufgeteilt in {anzahl_klassen} verschiedene Klassen.\n"
+            f"➜ Übersichtstabelle (Excel) wurde generiert."
         )
         
         if not errors_found:
@@ -365,10 +381,8 @@ def generate_pdf_receipts_task(output_dir):
             root.after(0, status_var.set, f"Konvertiere Klasse {klasse_name} in PDFs... ({current_progress + 1}/{anzahl_klassen})")
             
             try:
-                # 1. Wandelt den gesamten Ordner in PDFs um
                 convert(class_folder)
                 
-                # 2. PDFs zusammenfügen
                 merger = PdfWriter()
                 pdf_files = sorted([f for f in os.listdir(class_folder) if f.endswith('.pdf')])
                 
@@ -391,7 +405,6 @@ def generate_pdf_receipts_task(output_dir):
             root.after(0, status_var.set, "Prozess durch Benutzer abgebrochen.")
             return
 
-        # Abschlussmeldung PDF
         root.after(0, progress_var.set, anzahl_klassen)
         
         zusammenfassung = (
