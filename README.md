@@ -90,21 +90,21 @@ logo.png (Für die Anzeige in der GUI, max. 500x120 Pixel)
 Generierte Ausgabestruktur
 Plaintext
 
-```bash
-    Ausgabeordner/
-    ├── 2026_Quittungen_Uebersicht.xlsx
-    ├── 01_Nord_Sammelbelege_2026.pdf
-    ├── 02_Sued_Sammelbelege_2026.pdf
-    ├── Nord/
-    │   ├── 001_Sammel_PDF_Klasse_1a.pdf
-    │   └── 1a/
-    │       ├── 0000_Trennseite_1a.pdf
-    │       ├── 2026_Quittung_001_Familie_Müller.pdf
-    │       └── ...
-    └── Sued/
-        ├── 002_Sammel_PDF_Klasse_2b.pdf
-        └── 2b/
-            └── ...
+    ```bash
+        Ausgabeordner/
+        ├── 2026_Quittungen_Uebersicht.xlsx
+        ├── 01_Nord_Sammelbelege_2026.pdf
+        ├── 02_Sued_Sammelbelege_2026.pdf
+        ├── Nord/
+        │   ├── 001_Sammel_PDF_Klasse_1a.pdf
+        │   └── 1a/
+        │       ├── 0000_Trennseite_1a.pdf
+        │       ├── 2026_Quittung_001_Familie_Müller.pdf
+        │       └── ...
+        └── Sued/
+            ├── 002_Sammel_PDF_Klasse_2b.pdf
+            └── 2b/
+                └── ...
 
 ## ⚠️ Bekannte Fallstricke & Fehlerbehebung
 Programm friert bei PDF-Erstellung ein: Wird durch die Integration von word.DisplayAlerts = 0 nun automatisch unterdrückt. Sollte es dennoch passieren, prüfe im Task-Manager, ob versteckte Microsoft Word-Prozesse hängen geblieben sind, und beende diese (WINWORD.EXE).
