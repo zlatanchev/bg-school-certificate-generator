@@ -39,8 +39,8 @@ Klone das Repository und installiere die benötigten Abhängigkeiten.
 2. **Abhängigkeiten installieren:**
 Es wird empfohlen, eine virtuelle Umgebung (venv) zu nutzen. Die benötigten Pakete lassen sich wie folgt installieren:
 
-Bash
-pip install pandas openpyxl python-docx pywin32 pypdf Pillow num2words
+    ```bash
+    pip install pandas openpyxl python-docx pywin32 pypdf Pillow num2words
 
 ##  Bedienung des Tools
 
