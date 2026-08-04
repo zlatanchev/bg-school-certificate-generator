@@ -46,7 +46,7 @@ Es wird empfohlen, eine virtuelle Umgebung (venv) zu nutzen. Die benötigten Pak
 
 Das Tool ist in zwei aufeinanderfolgende Phasen unterteilt:
 
-### **Phase 1: Word generieren (📝)
+### Phase 1: Word generieren (📝)
 Wähle die Schülerliste (Excel) aus (muss die Spalten Filiale, In Klasse, Eltern 1 - Name, Eltern 1 - Emailadresse und Name Kind enthalten).
 
 Wähle die Preisliste (Excel) aus (Reiter: Gebuehren, Beitraege, Konfiguration).
@@ -89,6 +89,8 @@ logo.png (Für die Anzeige in der GUI, max. 500x120 Pixel)
 
 Generierte Ausgabestruktur
 Plaintext
+
+```bash
 Ausgabeordner/
 ├── 2026_Quittungen_Uebersicht.xlsx
 ├── 01_Nord_Sammelbelege_2026.pdf
@@ -103,6 +105,7 @@ Ausgabeordner/
     ├── 002_Sammel_PDF_Klasse_2b.pdf
     └── 2b/
         └── ...
+
 ## ⚠️ Bekannte Fallstricke & Fehlerbehebung
 Programm friert bei PDF-Erstellung ein: Wird durch die Integration von word.DisplayAlerts = 0 nun automatisch unterdrückt. Sollte es dennoch passieren, prüfe im Task-Manager, ob versteckte Microsoft Word-Prozesse hängen geblieben sind, und beende diese (WINWORD.EXE).
 
