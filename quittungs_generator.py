@@ -1,13 +1,15 @@
 # -*- coding: utf-8 -*-
 """
 Quittungs-Generator für Schulgebühren - Threading, Cancelling & PDF/Word Edition
-Inklusive Excel-Übersichtstabelle
+Inklusive Excel-Übersichtstabelle, Filial-Sortierung und PDF-Trennseiten
 """
 
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import pandas as pd
 from docx import Document
+from docx.shared import Pt
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 import os
 import sys
 import shutil
@@ -43,6 +45,9 @@ except ImportError:
 
 cancel_flag = False
 
+# ==========================================
+# HILFSFUNKTIONEN
+# ==========================================
 def initialize_paths():
     try:
         if getattr(sys, 'frozen', False):
@@ -136,9 +141,31 @@ def show_message_threadsafe(title, msg, is_error=False, is_warning=False):
     else:
         messagebox.showinfo(title, msg)
 
+# ==========================================
+# GUI HILFSFUNKTIONEN (DATEIAUSWAHL)
+# ==========================================
+def select_excel_file():
+    filepath = filedialog.askopenfilename(filetypes=[("Excel-Dateien", "*.xlsx *.xls")])
+    if filepath:
+        excel_path_var.set(filepath)
+
+def select_template_file():
+    filepath = filedialog.askopenfilename(filetypes=[("Word-Dokumente", "*.docx")])
+    if filepath:
+        template_path_var.set(filepath)
+
+def select_prices_file():
+    filepath = filedialog.askopenfilename(filetypes=[("Excel-Dateien", "*.xlsx *.xls")])
+    if filepath:
+        prices_path_var.set(filepath)
+
+def select_output_dir():
+    dirpath = filedialog.askdirectory()
+    if dirpath:
+        output_dir_var.set(dirpath)
 
 # ==========================================
-# PHASE 1: WORD-DOKUMENTE GENERIEREN (THREAD)
+# PHASE 1: WORD-DOKUMENTE GENERIEREN
 # ==========================================
 def start_word_generation():
     global cancel_flag
@@ -164,21 +191,25 @@ def generate_word_receipts_task(excel_path, template_path, prices_path, output_d
     class_folders = set()
     quittungs_nr = 1 
     
-    # NEU: Liste für die Excel-Übersichtstabelle
     summary_data = []
     
     try:
         child_fees, membership_fee, school_year = load_prices(prices_path)
-        
         df = pd.read_excel(excel_path)
+        
+        if 'Filiale' not in df.columns:
+            root.after(0, show_message_threadsafe, "Fehlendes Feld", "Die Spalte 'Filiale' fehlt in der Excel-Liste! Bitte ergänze diese Spalte, damit die Sammel-PDFs korrekt aufgeteilt werden können.", True)
+            root.after(0, toggle_buttons, False)
+            return
+
         df.dropna(subset=['Eltern 1 - Emailadresse', 'Name Kind'], inplace=True)
         df['Eltern 1 - Emailadresse'] = df['Eltern 1 - Emailadresse'].astype(str).str.strip()
+        df['Filiale'] = df['Filiale'].astype(str).str.strip()
         
         df['In Klasse Sortierung'] = df['In Klasse'].astype(str)
-        df.sort_values(by='In Klasse Sortierung', inplace=True)
+        df.sort_values(by=['Filiale', 'In Klasse Sortierung'], inplace=True)
         
         grouped = df.groupby('Eltern 1 - Emailadresse', sort=False)
-        
         total_parents = len(grouped)
         
         root.after(0, lambda: progress_bar.config(maximum=total_parents))
@@ -217,7 +248,10 @@ def generate_word_receipts_task(excel_path, template_path, prices_path, output_d
                 total_school_fee = sum(child_fees.get(i, 0) for i in range(1, num_children + 1))
                 total_amount = total_school_fee + membership_fee
                 
+                filiale = str(group['Filiale'].iloc[0])
                 klasse = str(group['In Klasse'].iloc[0])
+                
+                safe_filiale = filiale.replace("/", "_").replace("\\", "_")
                 safe_klasse = klasse.replace("/", "_").replace("\\", "_")
                 
                 eindeutige_nummer = f"{quittungs_nr:03d}"
@@ -239,7 +273,7 @@ def generate_word_receipts_task(excel_path, template_path, prices_path, output_d
                 for old, new in replacements.items():
                     docx_replace_text(doc, old, str(new))
 
-                outdir_class = os.path.join(output_dir, safe_klasse)
+                outdir_class = os.path.join(output_dir, safe_filiale, safe_klasse)
                 
                 if not os.path.exists(outdir_class):
                     os.makedirs(outdir_class)
@@ -253,9 +287,9 @@ def generate_word_receipts_task(excel_path, template_path, prices_path, output_d
                 
                 doc.save(output_filename)
 
-                # NEU: Daten zur Übersichtstabelle hinzufügen
                 summary_data.append({
                     'Quittung Nr.': eindeutige_nummer,
+                    'Filiale': filiale,
                     'Eltern 1 - Name': parent_full_name,
                     'Eltern 1 - Emailadresse': parent_email,
                     'In Klasse': klasse,
@@ -277,7 +311,6 @@ def generate_word_receipts_task(excel_path, template_path, prices_path, output_d
             root.after(0, status_var.set, "Prozess durch Benutzer abgebrochen.")
             return
 
-        # NEU: Erstelle die Übersichtstabelle in Excel am Ende von Schritt 1
         if summary_data:
             try:
                 summary_df = pd.DataFrame(summary_data)
@@ -287,7 +320,6 @@ def generate_word_receipts_task(excel_path, template_path, prices_path, output_d
             except Exception as e:
                 errors_found.append(f"Fehler beim Erstellen der Übersichtstabelle: {e}")
 
-        # Abschlussmeldung Word
         root.after(0, progress_var.set, total_parents)
         
         generierte_quittungen = quittungs_nr - 1
@@ -296,7 +328,7 @@ def generate_word_receipts_task(excel_path, template_path, prices_path, output_d
         zusammenfassung = (
             f"Statistik:\n"
             f"➜ {generierte_quittungen} Quittungen (Familien) erstellt.\n"
-            f"➜ Aufgeteilt in {anzahl_klassen} verschiedene Klassen.\n"
+            f"➜ Aufgeteilt in {anzahl_klassen} verschiedene Klassen (nach Filialen sortiert).\n"
             f"➜ Übersichtstabelle (Excel) wurde generiert."
         )
         
@@ -320,7 +352,7 @@ def generate_word_receipts_task(excel_path, template_path, prices_path, output_d
 
 
 # ==========================================
-# PHASE 2: PDFS GENERIEREN (THREAD)
+# PHASE 2: PDFS GENERIEREN (SEQUENTIELL FÜR STABILITÄT)
 # ==========================================
 def start_pdf_generation():
     global cancel_flag
@@ -344,198 +376,222 @@ def generate_pdf_receipts_task(output_dir):
     global cancel_flag
     errors_found = []
 
+    # COM Verbindung für diesen Thread sicher öffnen
     if HAS_PDF_TOOLS:
         pythoncom.CoInitialize()
 
     try:
-        class_folders = []
-        total_docx_files = 0
-        
-        if os.path.exists(output_dir):
-            for element in os.listdir(output_dir):
-                element_path = os.path.join(output_dir, element)
-                if os.path.isdir(element_path):
-                    docx_files = [f for f in os.listdir(element_path) if f.endswith('.docx') and not f.startswith('~')]
-                    if docx_files:
-                        class_folders.append(element_path)
-                        total_docx_files += len(docx_files)
+        filiale_folders = [f for f in os.listdir(output_dir) if os.path.isdir(os.path.join(output_dir, f))]
 
-        if not class_folders:
+        if not filiale_folders:
             root.after(0, status_var.set, "Warte auf Start...")
-            root.after(0, show_message_threadsafe, "Info", "Keine Klassen-Ordner mit Word-Dateien im Ausgabeordner gefunden.\nBitte führe zuerst Schritt 1 aus.")
+            root.after(0, show_message_threadsafe, "Info", "Keine Filial-Ordner gefunden. Bitte erst Schritt 1 ausführen.")
             return
 
-        anzahl_klassen = len(class_folders)
+        # Zähle alle Klassen für den Fortschrittsbalken
+        anzahl_klassen = sum([len([c for c in os.listdir(os.path.join(output_dir, f)) if os.path.isdir(os.path.join(output_dir, f, c))]) for f in filiale_folders])
         
-        root.after(0, lambda: progress_bar.config(maximum=anzahl_klassen))
-        root.after(0, lambda: status_var.set(f"Starte PDF-Konvertierung für {anzahl_klassen} Klassen..."))
-
+        root.after(0, lambda: progress_bar.config(maximum=anzahl_klassen + len(filiale_folders)))
         current_progress = 0
-        pdf_count = 0
 
-        for class_folder in class_folders:
-            if cancel_flag:
-                break
-
-            klasse_name = os.path.basename(class_folder)
-            root.after(0, status_var.set, f"Konvertiere Klasse {klasse_name} in PDFs... ({current_progress + 1}/{anzahl_klassen})")
+        # =========================================================
+        # SCHRITT A & B: Konvertieren und Klassen-PDFs bündeln
+        # =========================================================
+        for filiale_folder in filiale_folders:
+            if cancel_flag: break
+            filiale_path = os.path.join(output_dir, filiale_folder)
+            class_folders = sorted([c for c in os.listdir(filiale_path) if os.path.isdir(os.path.join(filiale_path, c))])
             
-            try:
-                convert(class_folder)
+            for klasse_name in class_folders:
+                if cancel_flag: break
+                class_path = os.path.join(filiale_path, klasse_name)
                 
-                merger = PdfWriter()
-                pdf_files = sorted([f for f in os.listdir(class_folder) if f.endswith('.pdf')])
+                root.after(0, status_var.set, f"Verarbeite Klasse {klasse_name} (Word konvertiert nacheinander...)")
                 
-                if pdf_files:
-                    final_pdf_path = os.path.join(output_dir, f"Sammel_PDF_Klasse_{klasse_name}.pdf")
-                    for pdf in pdf_files:
-                        merger.append(os.path.join(class_folder, pdf))
+                try:
+                    # 1. Trennseite generieren
+                    trenn_docx = os.path.join(class_path, f"0000_Trennseite_{klasse_name}.docx")
+                    if not os.path.exists(trenn_docx):
+                        t_doc = Document()
+                        p = t_doc.add_paragraph()
+                        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                        run = p.add_run(f"\n\n\n\n\n\nFiliale: {filiale_folder}\nKlasse: {klasse_name}")
+                        run.bold = True
+                        run.font.size = Pt(40)
+                        t_doc.save(trenn_docx)
+                    
+                    # 2. Sequentielle Konvertierung (Verhindert das Zuordnungs-Chaos in MS Word!)
+                    convert(class_path)
+                    
+                    # 3. Direkt zusammenführen in den Filial-Ordner
+                    class_merger = PdfWriter()
+                    pdf_files = sorted([f for f in os.listdir(class_path) if f.endswith('.pdf') and not f.startswith('Sammel')])
+                    
+                    if pdf_files:
+                        for pdf in pdf_files:
+                            class_merger.append(os.path.join(class_path, pdf))
+                        class_pdf_path = os.path.join(filiale_path, f"Sammel_PDF_Klasse_{klasse_name}.pdf")
+                        class_merger.write(class_pdf_path)
+                        class_merger.close()
                         
-                    merger.write(final_pdf_path)
-                    merger.close()
-                    pdf_count += 1
-                
+                except Exception as e:
+                    errors_found.append(f"Fehler in Klasse {klasse_name}: {e}")
+                    
                 current_progress += 1
                 root.after(0, progress_var.set, current_progress)
-                    
-            except Exception as e:
-                errors_found.append(f"Fehler bei PDF-Erstellung für Klasse {klasse_name}: {e}\n(Ist Microsoft Word geschlossen und bereit?)")
 
         if cancel_flag:
-            root.after(0, status_var.set, "Prozess durch Benutzer abgebrochen.")
+            root.after(0, status_var.set, "Prozess abgebrochen.")
             return
 
-        root.after(0, progress_var.set, anzahl_klassen)
-        
+        # =========================================================
+        # SCHRITT C: Filial-Sammel-PDFs erstellen
+        # =========================================================
+        erstellte_sammelbelege = []
+        root.after(0, status_var.set, "Schritt C: Füge Klassen zu Filial-Belegen zusammen...")
+
+        for filiale_folder in filiale_folders:
+            if cancel_flag: break
+
+            filiale_path = os.path.join(output_dir, filiale_folder)
+            filiale_merger = PdfWriter()
+            
+            # Suche alle generierten Klassen-Sammel-PDFs im Hauptordner
+            klassen_sammel_pdfs = sorted([f for f in os.listdir(filiale_path) if f.startswith('Sammel_PDF_Klasse_') and f.endswith('.pdf')])
+            
+            if klassen_sammel_pdfs:
+                try:
+                    for pdf in klassen_sammel_pdfs:
+                        filiale_merger.append(os.path.join(filiale_path, pdf))
+                    
+                    jahr_erstellung = datetime.now().strftime("%Y")
+                    dateiname_sammel = f"{filiale_folder}_Sammelbelege_{jahr_erstellung}.pdf"
+                    final_pdf_path = os.path.join(output_dir, dateiname_sammel)
+                    
+                    filiale_merger.write(final_pdf_path)
+                    filiale_merger.close()
+                    erstellte_sammelbelege.append(dateiname_sammel)
+                except Exception as e:
+                    errors_found.append(f"Fehler beim Filial-Sammel-PDF ({filiale_folder}): {e}")
+
+            current_progress += 1
+            root.after(0, progress_var.set, current_progress)
+
+        if cancel_flag:
+            return
+
+        # =========================================================
+        # ABSCHLUSS
+        # =========================================================
+        sammelbelege_text = "\n".join([f"   ➜ {name}" for name in erstellte_sammelbelege])
         zusammenfassung = (
             f"Statistik:\n"
-            f"➜ {total_docx_files} einzelne Quittungen verarbeitet.\n"
-            f"➜ {total_docx_files} Einzel-PDFs in den Klassenordnern generiert.\n"
-            f"➜ {pdf_count} Sammel-PDFs (Klassen) erfolgreich im Ausgabeordner erstellt."
+            f"➜ Klassen-Sammel-PDFs direkt in den Filial-Ordnern erstellt.\n"
+            f"➜ {len(erstellte_sammelbelege)} Filial-Sammel-PDF(s) erfolgreich erstellt:\n"
+            f"{sammelbelege_text}"
         )
 
         if not errors_found:
-            root.after(0, status_var.set, "PDF-Sammelquittungen erfolgreich generiert!")
-            root.after(0, show_message_threadsafe, "Schritt 2 abgeschlossen", f"PDF-Prozess erfolgreich beendet!\n\n{zusammenfassung}")
+            root.after(0, status_var.set, "PDF-Generierung fehlerfrei abgeschlossen!")
+            root.after(0, show_message_threadsafe, "Schritt 2 abgeschlossen", f"PDF-Prozess beendet!\n\n{zusammenfassung}")
         else:
             root.after(0, status_var.set, "Mit Warnungen abgeschlossen.")
             error_summary = "\n\n------------------------------------\n\n".join(errors_found)
-            final_message = (
-                f"PDF-Sammelquittungen wurden generiert.\n\n{zusammenfassung}\n\n"
-                f"Es gab jedoch Probleme/Fehler:\n\n{error_summary}"
-            )
-            root.after(0, show_message_threadsafe, "PDF-Generierung (mit Warnungen)", final_message, False, True)
+            final_message = f"Generierung beendet, aber es gab Fehler:\n\n{error_summary}"
+            root.after(0, show_message_threadsafe, "Warnung", final_message, False, True)
 
     except Exception as e:
-        root.after(0, status_var.set, "Kritischer Fehler aufgetreten!")
-        root.after(0, show_message_threadsafe, "Kritischer Fehler", f"Ein Fehler hat die PDF-Verarbeitung gestoppt:\n{e}", True)
+        root.after(0, status_var.set, "Kritischer Fehler!")
+        root.after(0, show_message_threadsafe, "Fehler", f"Ein Fehler hat den Prozess gestoppt:\n{e}", True)
     finally:
         if HAS_PDF_TOOLS:
             pythoncom.CoUninitialize()
         root.after(0, toggle_buttons, False)
 
+# ==========================================
+# HAUPTPROGRAMM / GUI-START
+# ==========================================
+if __name__ == '__main__':
+    root = tk.Tk()
+    root.title("Quittungs-Generator (PDF & Word Edition)")
+    root.geometry("650x550") 
 
-# --- GUI Code ---
-def select_excel_file():
-    filepath = filedialog.askopenfilename(filetypes=[("Excel-Dateien", "*.xlsx *.xls")])
-    if filepath:
-        excel_path_var.set(filepath)
+    excel_path_var = tk.StringVar()
+    template_path_var = tk.StringVar()
+    prices_path_var = tk.StringVar()
+    output_dir_var = tk.StringVar()
+    logo_path_var = tk.StringVar()
 
-def select_template_file():
-    filepath = filedialog.askopenfilename(filetypes=[("Word-Dokumente", "*.docx")])
-    if filepath:
-        template_path_var.set(filepath)
+    frame = tk.Frame(root, padx=10, pady=10)
+    frame.pack(expand=True, fill=tk.X) 
 
-def select_prices_file():
-    filepath = filedialog.askopenfilename(filetypes=[("Excel-Dateien", "*.xlsx *.xls")])
-    if filepath:
-        prices_path_var.set(filepath)
+    frame.grid_columnconfigure(0, weight=1)
+    frame.grid_columnconfigure(1, weight=0)
 
-def select_output_dir():
-    dirpath = filedialog.askdirectory()
-    if dirpath:
-        output_dir_var.set(dirpath)
+    initialize_paths()
 
-root = tk.Tk()
-root.title("Quittungs-Generator (PDF & Word Edition - Multi-Thread)")
-root.geometry("650x550") 
-
-excel_path_var = tk.StringVar()
-template_path_var = tk.StringVar()
-prices_path_var = tk.StringVar()
-output_dir_var = tk.StringVar()
-logo_path_var = tk.StringVar()
-
-frame = tk.Frame(root, padx=10, pady=10)
-frame.pack(expand=True, fill=tk.X) 
-
-frame.grid_columnconfigure(0, weight=1)
-frame.grid_columnconfigure(1, weight=0)
-
-initialize_paths()
-
-logo_path = logo_path_var.get()
-if os.path.exists(logo_path):
-    if HAS_PILLOW:
-        try:
-            img = Image.open(logo_path)
-            max_width = 500
-            max_height = 120
+    logo_path = logo_path_var.get()
+    if os.path.exists(logo_path):
+        if HAS_PILLOW:
             try:
-                resample_filter = Image.Resampling.LANCZOS 
-            except AttributeError:
-                resample_filter = Image.ANTIALIAS 
+                img = Image.open(logo_path)
+                max_width = 500
+                max_height = 120
+                try:
+                    resample_filter = Image.Resampling.LANCZOS 
+                except AttributeError:
+                    resample_filter = Image.ANTIALIAS 
 
-            img.thumbnail((max_width, max_height), resample_filter)
-            logo_img = ImageTk.PhotoImage(img)
-            root.logo_img = logo_img 
-            tk.Label(frame, image=logo_img).grid(row=0, column=0, columnspan=2, pady=(0, 15))
-        except Exception as e:
-            tk.Label(frame, text="[Fehler bei der Logo-Verarbeitung]").grid(row=0, column=0, columnspan=2, pady=(0, 15))
-    else:
-        tk.Label(frame, text="[Bitte 'Pillow' installieren für Logo-Skalierung]", fg="red").grid(row=0, column=0, columnspan=2, pady=(0, 15))
+                img.thumbnail((max_width, max_height), resample_filter)
+                logo_img = ImageTk.PhotoImage(img)
+                root.logo_img = logo_img 
+                tk.Label(frame, image=logo_img).grid(row=0, column=0, columnspan=2, pady=(0, 15))
+            except Exception as e:
+                tk.Label(frame, text="[Fehler bei der Logo-Verarbeitung]").grid(row=0, column=0, columnspan=2, pady=(0, 15))
+        else:
+            tk.Label(frame, text="[Bitte 'Pillow' installieren für Logo-Skalierung]", fg="red").grid(row=0, column=0, columnspan=2, pady=(0, 15))
 
-# Eingabefelder und Buttons
-tk.Label(frame, text="1. Excel-Datei (Schülerliste) auswählen:").grid(row=1, column=0, sticky="w", pady=2)
-tk.Entry(frame, textvariable=excel_path_var, width=60).grid(row=2, column=0, padx=(0, 5), sticky="ew")
-tk.Button(frame, text="Durchsuchen...", command=select_excel_file).grid(row=2, column=1)
+    # Eingabefelder und Buttons
+    tk.Label(frame, text="1. Excel-Datei (Schülerliste) auswählen:").grid(row=1, column=0, sticky="w", pady=2)
+    tk.Entry(frame, textvariable=excel_path_var, width=60).grid(row=2, column=0, padx=(0, 5), sticky="ew")
+    tk.Button(frame, text="Durchsuchen...", command=select_excel_file).grid(row=2, column=1)
 
-tk.Label(frame, text="2. Excel-Datei (Preise) auswählen:").grid(row=3, column=0, sticky="w", pady=(10, 2))
-tk.Entry(frame, textvariable=prices_path_var, width=60).grid(row=4, column=0, padx=(0, 5), sticky="ew")
-tk.Button(frame, text="Durchsuchen...", command=select_prices_file).grid(row=4, column=1)
+    tk.Label(frame, text="2. Excel-Datei (Preise) auswählen:").grid(row=3, column=0, sticky="w", pady=(10, 2))
+    tk.Entry(frame, textvariable=prices_path_var, width=60).grid(row=4, column=0, padx=(0, 5), sticky="ew")
+    tk.Button(frame, text="Durchsuchen...", command=select_prices_file).grid(row=4, column=1)
 
-tk.Label(frame, text="3. Word-Vorlagendatei auswählen:").grid(row=5, column=0, sticky="w", pady=(10, 2))
-tk.Entry(frame, textvariable=template_path_var, width=60).grid(row=6, column=0, padx=(0, 5), sticky="ew")
-tk.Button(frame, text="Durchsuchen...", command=select_template_file).grid(row=6, column=1)
+    tk.Label(frame, text="3. Word-Vorlagendatei auswählen:").grid(row=5, column=0, sticky="w", pady=(10, 2))
+    tk.Entry(frame, textvariable=template_path_var, width=60).grid(row=6, column=0, padx=(0, 5), sticky="ew")
+    tk.Button(frame, text="Durchsuchen...", command=select_template_file).grid(row=6, column=1)
 
-tk.Label(frame, text="4. Ausgabeordner auswählen:").grid(row=7, column=0, sticky="w", pady=(10, 2))
-tk.Entry(frame, textvariable=output_dir_var, width=60).grid(row=8, column=0, padx=(0, 5), sticky="ew")
-tk.Button(frame, text="Durchsuchen...", command=select_output_dir).grid(row=8, column=1)
+    tk.Label(frame, text="4. Ausgabeordner auswählen:").grid(row=7, column=0, sticky="w", pady=(10, 2))
+    tk.Entry(frame, textvariable=output_dir_var, width=60).grid(row=8, column=0, padx=(0, 5), sticky="ew")
+    tk.Button(frame, text="Durchsuchen...", command=select_output_dir).grid(row=8, column=1)
 
-# Frame für die Steuerungsknöpfe
-button_frame = tk.Frame(frame)
-button_frame.grid(row=9, column=0, columnspan=2, pady=(20, 5))
+    # Frame für die Steuerungsknöpfe
+    button_frame = tk.Frame(frame)
+    button_frame.grid(row=9, column=0, columnspan=2, pady=(20, 5))
 
-btn_generate_word = tk.Button(button_frame, text="📝 1. Word generieren", font=("Helvetica", 11, "bold"), command=start_word_generation, bg="#2196F3", fg="white")
-btn_generate_word.pack(side=tk.LEFT, padx=5, ipadx=5, ipady=5)
+    btn_generate_word = tk.Button(button_frame, text="📝 1. Word generieren", font=("Helvetica", 11, "bold"), command=start_word_generation, bg="#2196F3", fg="white")
+    btn_generate_word.pack(side=tk.LEFT, padx=5, ipadx=5, ipady=5)
 
-btn_generate_pdf = tk.Button(button_frame, text="📄 2. PDFs generieren", font=("Helvetica", 11, "bold"), command=start_pdf_generation, bg="#4CAF50", fg="white")
-btn_generate_pdf.pack(side=tk.LEFT, padx=5, ipadx=5, ipady=5)
+    btn_generate_pdf = tk.Button(button_frame, text="📄 2. PDFs generieren", font=("Helvetica", 11, "bold"), command=start_pdf_generation, bg="#4CAF50", fg="white")
+    btn_generate_pdf.pack(side=tk.LEFT, padx=5, ipadx=5, ipady=5)
 
-btn_cancel = tk.Button(button_frame, text="🛑 Abbrechen", font=("Helvetica", 11, "bold"), command=cancel_process, bg="#cc3025", fg="white", state=tk.DISABLED)
-btn_cancel.pack(side=tk.LEFT, padx=5, ipadx=5, ipady=5)
+    btn_cancel = tk.Button(button_frame, text="🛑 Abbrechen", font=("Helvetica", 11, "bold"), command=cancel_process, bg="#cc3025", fg="white", state=tk.DISABLED)
+    btn_cancel.pack(side=tk.LEFT, padx=5, ipadx=5, ipady=5)
 
-# Status-Text
-status_var = tk.StringVar()
-status_var.set("Warte auf Start...")
-tk.Label(frame, textvariable=status_var, fg="blue", font=("Helvetica", 10)).grid(row=10, column=0, columnspan=2, pady=(0, 5))
+    # Status-Text
+    status_var = tk.StringVar()
+    status_var.set("Warte auf Start...")
+    tk.Label(frame, textvariable=status_var, fg="blue", font=("Helvetica", 10)).grid(row=10, column=0, columnspan=2, pady=(0, 5))
 
-# Fortschrittsbalken
-progress_var = tk.IntVar()
-progress_bar = ttk.Progressbar(frame, variable=progress_var, mode='determinate')
-progress_bar.grid(row=11, column=0, columnspan=2, sticky="ew", pady=(0, 15))
+    # Fortschrittsbalken
+    progress_var = tk.IntVar()
+    progress_bar = ttk.Progressbar(frame, variable=progress_var, mode='determinate')
+    progress_bar.grid(row=11, column=0, columnspan=2, sticky="ew", pady=(0, 15))
 
-# Info-Feld
-tk.Label(frame, text="Version 25.06.2026; I. Zlat.", font=("Helvetica", 8), fg="gray").grid(row=12, column=0, columnspan=2, pady=(0, 5))
+    # Info-Feld
+    tk.Label(frame, text="Version 04.08.2026; I. Zlat. (Bugfix - Sequentiell & Ordnerstruktur)", font=("Helvetica", 8), fg="gray").grid(row=12, column=0, columnspan=2, pady=(0, 5))
 
-root.mainloop()
+    root.mainloop()
